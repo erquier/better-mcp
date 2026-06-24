@@ -1,0 +1,48 @@
+{
+  "name": "@erquier/better-mcp",
+  "version": "0.1.0",
+  "description": "MCP server universal para que agentes de IA interactúen con cualquier proyecto — filesystem, DB, shell, git y project tools.",
+  "type": "module",
+  "bin": {
+    "better-mcp": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "dev": "tsc --watch",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "prepublishOnly": "pnpm build"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "ai",
+    "agent",
+    "developer-tools",
+    "project-tools",
+    "filesystem",
+    "database",
+    "git",
+    "hermes",
+    "claude-code",
+    "cursor"
+  ],
+  "author": "Erne Santana",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/erquier/better-mcp.git"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}
