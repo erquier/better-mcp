@@ -15,6 +15,8 @@ export class ServerState {
   activeProject: string | null = null;
   transportType: "stdio" | "http" = "stdio";
   loadedPlugins: LoadedPlugin[] = [];
+  /** Session ID for the current transport (HTTP mode). Undefined for stdio. */
+  sessionId?: string;
 
   constructor(config: BetterMcpConfig) {
     this.config = config;
@@ -38,6 +40,8 @@ export interface ToolContext {
   sendSseEvent?: (event: string, data: unknown) => void;
   /** Server state for stateful operations (e.g., workspace_set_project). */
   state: ServerState;
+  /** Session ID from the transport (HTTP mode). Undefined for stdio. */
+  sessionId?: string;
 }
 
 // ─── Tool Definition ───────────────────────────────────────────────────────

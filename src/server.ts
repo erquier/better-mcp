@@ -199,7 +199,7 @@ function collectToolDefinitions(state: ServerState): ToolDefinition[] {
         if (typeof confirmationId !== "string" || confirmationId.length === 0) {
           throw new Error("auth_confirm requires a non-empty string 'confirmationId'");
         }
-        const confirmed = confirmOperation(confirmationId, undefined);
+        const confirmed = confirmOperation(confirmationId, ctx.sessionId);
         return {
           content: [
             {
@@ -225,7 +225,7 @@ function collectToolDefinitions(state: ServerState): ToolDefinition[] {
         if (typeof confirmationId !== "string" || confirmationId.length === 0) {
           throw new Error("auth_reject requires a non-empty string 'confirmationId'");
         }
-        const existed = rejectOperation(confirmationId, undefined);
+        const existed = rejectOperation(confirmationId, ctx.sessionId);
         return {
           content: [
             {
@@ -357,11 +357,12 @@ function createConfiguredServer(state: ServerState): Server {
         loadedPlugins: state.loadedPlugins,
         sendSseEvent: _sendSseEvent || undefined,
         state,
+        sessionId: state.sessionId,
       };
 
       // Auth gating check (only for tools that declare requiresAuth)
       if (def.requiresAuth && def.requiresAuth(cleanArgs ?? {})) {
-        const authResult = checkAuth(name, cleanArgs ?? {}, state.config.auth, state.transportType);
+        const authResult = checkAuth(name, cleanArgs ?? {}, state.config.auth, state.transportType, state.sessionId);
         if (!authResult.allowed) {
           if (state.config.auth?.mode === "interactive" && state.transportType === "http") {
             sendConfirmationSseEvent(authResult.confirmationId!, authResult.tool!, authResult.args!);
@@ -520,6 +521,7 @@ async function startHttpServer(): Promise<void> {
   const server = createConfiguredServer(_state);
 
   _state.transportType = "http";
+  _state.sessionId = httpTransport.sessionId;
 
   // In interactive mode, set up the SSE event handler
   if (_state.config.auth?.mode === "interactive") {

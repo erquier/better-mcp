@@ -221,12 +221,16 @@ function handleCors(
   // Set CORS headers
   if (allowedOrigin) {
     res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
-  } else {
-    res.setHeader("Access-Control-Allow-Origin", origin || "*");
+  } else if (origin) {
+    // Origin present but not allowed — already handled above (403 returned)
+    // Don't set any Access-Control-Allow-Origin
   }
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, MCP-Protocol-Version");
-  res.setHeader("Access-Control-Max-Age", "86400");
+  // Only set CORS headers when we actually allow the request
+  if (allowedOrigin || req.method === "OPTIONS") {
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, MCP-Protocol-Version");
+    res.setHeader("Access-Control-Max-Age", "86400");
+  }
 
   return true;
 }
@@ -263,6 +267,12 @@ function checkAuthHeader(
   }
 
   const providedToken = parts[1];
+
+  // Reject tokens longer than 1024 bytes to prevent header abuse
+  if (Buffer.byteLength(providedToken, "utf-8") > 1024) {
+    return false;
+  }
+
   return safeCompare(providedToken, authToken);
 }
 

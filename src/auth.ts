@@ -83,6 +83,21 @@ const DANGEROUS_COMMAND_KEYWORDS = [
 const SAFE_SQL_KEYWORDS = ["SELECT ", "WITH ", "EXPLAIN "];
 
 /**
+ * Detect data-modifying CTEs (WITH ... AS (DELETE|INSERT|UPDATE|MERGE ...)).
+ * These bypass a simple `startsWith("SELECT")` check and can modify data
+ * even when wrapped in a SELECT.
+ */
+export function hasDestructiveCte(sql: string): boolean {
+  // Match WITH <name> AS ( ... DML ... )
+  // Uses a non-greedy match for the subquery body, then checks for DML keywords.
+  // This is a best-effort check — a determined attacker could obfuscate it,
+  // but the engine-level read-only mode (SET TRANSACTION READ ONLY) serves
+  // as the real protection.
+  const ctePattern = /WITH\s+\w+\s+AS\s*\([^)]*(?:DELETE|INSERT|UPDATE|MERGE)\s/i;
+  return ctePattern.test(sql);
+}
+
+/**
  * Check if a tool is always destructive.
  */
 export function isDestructiveTool(toolName: string): boolean {

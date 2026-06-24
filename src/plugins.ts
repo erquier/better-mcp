@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, statSync } from "fs";
-import { resolve, isAbsolute } from "path";
+import { existsSync, lstatSync, readdirSync, realpathSync } from "fs";
+import { resolve, isAbsolute, relative } from "path";
 import type { BetterMcpConfig } from "./config.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────
@@ -131,12 +131,47 @@ export function discoverPluginFiles(pluginsDir: string): string[] {
 
   const entries = readdirSync(pluginsDir);
   const files: string[] = [];
+  const resolvedPluginsDir = realpathSync(pluginsDir);
 
   for (const entry of entries) {
     const fullPath = resolve(pluginsDir, entry);
 
+    // Use lstatSync to detect symlinks (statSync follows them)
+    let stat;
+    try {
+      stat = lstatSync(fullPath);
+    } catch {
+      // If we can't stat, skip
+      continue;
+    }
+
+    // Skip symlinks — they could point outside the plugins directory
+    if (stat.isSymbolicLink()) {
+      console.error(
+        `[plugins] Skipping symlink \"${fullPath}\" — symlinks are not allowed in plugins directory`,
+      );
+      continue;
+    }
+
     // Skip directories
-    if (statSync(fullPath).isDirectory()) {
+    if (stat.isDirectory()) {
+      continue;
+    }
+
+    // Verify the resolved real path is within the plugins directory
+    try {
+      const realPath = realpathSync(fullPath);
+      const rel = relative(resolvedPluginsDir, realPath);
+      if (rel.startsWith("..") || isAbsolute(rel)) {
+        console.error(
+          `[plugins] Skipping \"${fullPath}\" — resolved path \"${realPath}\" is outside plugins directory`,
+        );
+        continue;
+      }
+    } catch {
+      console.error(
+        `[plugins] Skipping \"${fullPath}\" — could not resolve real path`,
+      );
       continue;
     }
 
@@ -258,6 +293,15 @@ export async function discoverPlugins(
 
     if (!plugin) {
       continue; // Already logged by loadPluginFile
+    }
+
+    // Verify that plugin.name matches the filename (basename without extension)
+    const expectedName = pluginNameFromPath(filePath);
+    if (plugin.name !== expectedName) {
+      console.error(
+        `[plugins] Plugin \"${filePath}\" declares name \"${plugin.name}\" but filename is \"${expectedName}\" — possible mismatch`,
+      );
+      // Still load it, but warn
     }
 
     loaded.push(plugin);

@@ -1,6 +1,7 @@
 import { spawnSync } from "child_process";
 import type { BetterMcpConfig } from "../config.js";
 import type { ToolDefinition, ToolContext } from "../tool-registry.js";
+import { hasDestructiveCte } from "../auth.js";
 
 type PsqlResult = { stdout: string; stderr: string; status: number | null };
 
@@ -70,9 +71,15 @@ export function query(
     : sql.trim().replace(/;$/, "");
 
   // Determine read-only mode preference
+  // When maxRows > 0, default to "engine" for maximum safety
   const readOnlyMode =
     dbConfig.readOnlyMode ??
-    (dbConfig.readOnly !== false ? "engine" : "none");
+    (maxRows > 0 || dbConfig.readOnly !== false ? "engine" : "none");
+
+  // If using wrapper mode, also check for destructive CTEs that bypass the allowlist
+  if (readOnlyMode === "wrapper" && hasDestructiveCte(sql)) {
+    throw new Error("Destructive CTEs not allowed in read-only mode");
+  }
 
   const rows = runPsqlAndGetJson(dbConfig.url, limitedSql, "Query", {
     readOnlyMode,
