@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { loadConfig, resolveEnv, type BetterMcpConfig } from "../config.js";
-import { writeFileSync, unlinkSync, existsSync, mkdirSync } from "fs";
+import { writeFileSync, unlinkSync, existsSync, mkdirSync, mkdtempSync, realpathSync } from "fs";
 import { resolve } from "path";
+import { tmpdir } from "os";
 
 const TEST_CONFIG_PATH = resolve(process.cwd(), "test-config.json");
 
@@ -99,16 +100,18 @@ describe("loadConfig", () => {
     expect(config.resources?.readme).toBe("README.md");
   });
 
-  it("should throw when config file not found", () => {
+  it("should throw when an EXPLICIT config path is not found", () => {
     expect(() => loadConfig("/nonexistent/path.json")).toThrow(
-      "Config file (better-mcp.json) not found",
+      "Config file not found: /nonexistent/path.json",
     );
   });
 
-  it("should try default paths when no configPath given", () => {
-    // Change to a dir without config
-    process.chdir("/tmp");
-    expect(() => loadConfig()).toThrow("Config file (better-mcp.json) not found");
+  it("auto-detects a config when no better-mcp.json is present (zero-config drop-in)", () => {
+    const dir = realpathSync(mkdtempSync(resolve(tmpdir(), "bmcp-cfg-")));
+    process.chdir(dir); // afterEach restores cwd
+    const config = loadConfig();
+    expect(config.root).toBe(dir);
+    expect(config.tools?.fs?.allowedPaths).toEqual([dir]);
   });
 
   it("should resolve env vars in db.url", () => {

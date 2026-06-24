@@ -65,9 +65,21 @@ npm install -g @erquier/better-mcp
 npx @erquier/better-mcp run
 ```
 
-### 2. Crear `better-mcp.json` en la raíz del proyecto
+### 2. (Opcional) Generar `better-mcp.json`
 
-Configuración completa — agrega los tool groups que necesites:
+**No hace falta configurar nada para empezar.** Si no hay `better-mcp.json`, better-mcp
+**auto-detecta** el proyecto desde el directorio actual: `root` = cwd, el repo como sandbox de
+filesystem, los scripts de `package.json` como `shell.commands`, `DATABASE_URL` (si es Postgres)
+como DB read-only, y `README`/`schema`/`handoff` como recursos. Es realmente _agregar y usar_,
+sin imágenes ni setup.
+
+Para personalizar, generá un config pre-rellenado y editalo:
+
+```bash
+npx @erquier/better-mcp init   # escanea el cwd y escribe better-mcp.json
+```
+
+Config completo de ejemplo — agregá los tool groups que necesites:
 
 ```json
 {
@@ -452,22 +464,25 @@ Las tools de plugins se registran como `plugin_<nombre>_<tool>`. Se descubren au
 
 ## Instalación
 
-### npm (recomendado)
+### npm / npx (recomendado)
 ```bash
 npm install -g @erquier/better-mcp
-# o
-npx @erquier/better-mcp run
+# o, sin instalar nada:
+npx @erquier/better-mcp        # arranca en stdio sobre el cwd (zero-config)
 ```
+Esta es la vía sin fricción: el cliente MCP del agente arranca el binario en **stdio** y queda
+todo en local, sin red ni imágenes. `fs_search` cae a una búsqueda en Node si no hay `ripgrep`,
+y las DB tools solo se activan si detecta una `DATABASE_URL` de Postgres (y requieren `psql`).
 
-### Docker
+### Docker (opcional / avanzado)
+> No es necesario para el uso normal — la vía `npx`/stdio de arriba evita imágenes por completo.
+> Usá Docker solo si querés exponer better-mcp como servicio HTTP compartido (atá el puerto a
+> `127.0.0.1` y configurá `auth`, ya que el modo HTTP no autentica por sí solo).
+
 ```bash
 docker pull ghcr.io/erquier/better-mcp
-docker run -v $(pwd):/project -p 3100:3100 ghcr.io/erquier/better-mcp
+docker run -v $(pwd):/project -p 127.0.0.1:3100:3100 ghcr.io/erquier/better-mcp --http
 ```
-
-La imagen Docker es **multi-stage**:
-- **Builder stage**: compila TypeScript.
-- **Runner stage**: imagen Alpine minimalista con `postgresql-client` para DB tools.
 
 ### Python — ✅ Disponible
 ```bash

@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, realpathSync } from "fs";
-import { resolve, isAbsolute, sep, relative } from "path";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, realpathSync, lstatSync, readlinkSync, type Dirent } from "fs";
+import { resolve, isAbsolute, sep, dirname, basename, extname } from "path";
 import { execFileSync } from "child_process";
 
 const DEFAULT_MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
@@ -116,12 +116,18 @@ export function searchFiles(
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (e: unknown) {
-    // rg returns exit code 1 when no matches — not an error
-    const err = e as { stderr?: string; stdout?: string; status?: number; message?: string };
+    const err = e as { stderr?: string; status?: number; code?: string; signal?: string };
+    // rg returns exit code 1 when no matches — not an error.
     if (err.status === 1) {
       return { matches: [] };
     }
-    throw new Error("Search failed");
+    // ripgrep not installed / not in PATH → fall back to a pure-Node search so
+    // the tool works in ANY project without extra setup (drop-in).
+    if (err.code === "ENOENT") {
+      return { matches: nodeSearch(pattern, allowedPaths, fileGlob, safeLimit) };
+    }
+    if (err.signal === "SIGTERM") throw new Error("Search timed out");
+    throw new Error(err.stderr ? `Search failed: ${String(err.stderr).slice(0, 300)}` : "Search failed");
   }
 
   const matches = output
@@ -177,6 +183,58 @@ export function listDirectory(
   return results;
 }
 
+/**
+ * Canonicalize a path even when it (or part of it) does not exist yet.
+ *
+ * realpathSync only works for existing paths. For a new file (fs_write), the
+ * naive fallback to the *lexical* path lets an attacker escape the sandbox: if a
+ * parent component is a symlink pointing outside allowedPaths, the lexical path
+ * still looks "inside" while the OS write follows the link to the real target.
+ *
+ * This resolves the deepest existing ancestor with realpathSync and re-appends
+ * the non-existing tail, and explicitly follows symlinks (including DANGLING
+ * symlinks that realpathSync would throw on) so the returned path reflects where
+ * the OS will actually read/write. The allowedPaths check then runs on this
+ * canonical path, closing the symlinked-parent escape.
+ */
+function canonicalize(abs: string, depth = 0): string {
+  if (depth > 64) throw new Error("Too many symlink levels");
+  let current = abs;
+  const tail: string[] = [];
+
+  for (;;) {
+    let st: ReturnType<typeof lstatSync> | null = null;
+    try {
+      st = lstatSync(current);
+    } catch {
+      st = null;
+    }
+
+    if (st) {
+      let real: string;
+      if (st.isSymbolicLink()) {
+        // Follow the link target ourselves so dangling symlinks still resolve to
+        // their (non-existing) destination instead of being treated as "inside".
+        const link = readlinkSync(current);
+        const target = isAbsolute(link) ? link : resolve(dirname(current), link);
+        real = canonicalize(target, depth + 1);
+      } else {
+        try {
+          real = realpathSync(current);
+        } catch {
+          real = resolve(current);
+        }
+      }
+      return tail.length ? resolve(real, ...tail.reverse()) : real;
+    }
+
+    const parent = dirname(current);
+    if (parent === current) return resolve(abs); // reached filesystem root
+    tail.push(basename(current));
+    current = parent;
+  }
+}
+
 function resolvePath(filePath: string, allowedPaths: string[]): string {
   // Validate input type
   if (typeof filePath !== "string" || filePath.length === 0) {
@@ -193,18 +251,14 @@ function resolvePath(filePath: string, allowedPaths: string[]): string {
     ? resolve(filePath)
     : resolve(process.cwd(), filePath);
 
-  // Ensure the resolved path doesn't escape via symlinks
-  let realAbs: string;
-  try {
-    realAbs = realpathSync(abs);
-  } catch {
-    // If realpath fails (e.g., file doesn't exist), use the resolved path
-    realAbs = abs;
-  }
+  // Canonical path the OS will actually touch (resolves symlinks even for
+  // not-yet-existing files / through symlinked parent dirs).
+  const realAbs = canonicalize(abs);
 
-  // Check if the real path is within any of the allowed paths
+  // Check if the real path is within any of the allowed paths (also canonicalized
+  // so a symlinked allowed root still matches).
   const allowed = allowedPaths.some((p) => {
-    const resolvedAllowed = resolve(p);
+    const resolvedAllowed = canonicalize(resolve(p));
     return realAbs.startsWith(resolvedAllowed + sep) || realAbs === resolvedAllowed;
   });
 
@@ -212,5 +266,98 @@ function resolvePath(filePath: string, allowedPaths: string[]): string {
     throw new Error("Access denied: path is not within allowed paths");
   }
 
-  return abs;
+  // Return the canonical path so reads/writes operate on the real location, never
+  // through an unresolved symlink.
+  return realAbs;
+}
+
+const SEARCH_SKIP_DIRS = new Set([
+  "node_modules", ".git", ".next", "dist", "build", ".turbo", "coverage", ".cache", "vendor", "target",
+]);
+const SEARCH_MAX_FILE_BYTES = 5 * 1024 * 1024;
+
+/** Convert a simple glob (*, ?) into a RegExp anchored to the basename. */
+function globToRegExp(glob: string): RegExp {
+  const re = glob
+    .split("")
+    .map((c) => (c === "*" ? ".*" : c === "?" ? "." : /[.\\+^$()[\]{}|]/.test(c) ? "\\" + c : c))
+    .join("");
+  return new RegExp("^" + re + "$");
+}
+
+/**
+ * Pure-Node recursive content search — fallback when ripgrep isn't installed.
+ * Walks allowedPaths, skips heavy/binary files, and matches `pattern` (as a
+ * RegExp, or literal substring if the pattern isn't a valid RegExp) per line.
+ * Exported for tests; production calls it via searchFiles' ripgrep fallback.
+ */
+export function nodeSearch(
+  pattern: string,
+  allowedPaths: string[],
+  fileGlob: string | undefined,
+  limit: number,
+): { file: string; line: number; content: string }[] {
+  let matcher: (s: string) => boolean;
+  try {
+    const re = new RegExp(pattern);
+    matcher = (s) => re.test(s);
+  } catch {
+    matcher = (s) => s.includes(pattern);
+  }
+  const nameRe = fileGlob ? globToRegExp(fileGlob) : null;
+  const matches: { file: string; line: number; content: string }[] = [];
+
+  const visit = (dir: string): void => {
+    if (matches.length >= limit) return;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (matches.length >= limit) return;
+      const full = resolve(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (SEARCH_SKIP_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
+        visit(full);
+      } else if (entry.isFile()) {
+        if (nameRe && !nameRe.test(entry.name)) continue;
+        if (extname(entry.name) === "") {
+          // allow extensionless (configs, scripts) but still size-guard below
+        }
+        let stat;
+        try {
+          stat = statSync(full);
+        } catch {
+          continue;
+        }
+        if (stat.size > SEARCH_MAX_FILE_BYTES) continue;
+        let content: string;
+        try {
+          content = readFileSync(full, "utf-8");
+        } catch {
+          continue;
+        }
+        if (content.includes("\0")) continue; // skip binary
+        const lines = content.split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          if (matches.length >= limit) return;
+          if (matcher(lines[i])) {
+            matches.push({ file: full, line: i + 1, content: lines[i].slice(0, 1000) });
+          }
+        }
+      }
+    }
+  };
+
+  for (const p of allowedPaths) {
+    if (matches.length >= limit) break;
+    try {
+      visit(resolve(p));
+    } catch {
+      // ignore unreadable root
+    }
+  }
+  return matches.slice(0, limit);
 }

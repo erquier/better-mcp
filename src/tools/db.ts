@@ -189,8 +189,21 @@ function runPsql(url: string, sql: string, operation: string): PsqlResult {
     stdio: ["ignore", "pipe", "pipe"],
   });
 
-  if (result.error || result.status !== 0) {
-    throw new Error(`${operation} failed`);
+  if (result.error) {
+    const err = result.error as NodeJS.ErrnoException;
+    if (err.code === "ENOENT") {
+      throw new Error(
+        "psql not found — the database tools require the PostgreSQL client (psql) on PATH.",
+      );
+    }
+    throw new Error(`${operation} failed: ${err.message}`);
+  }
+  if (result.status !== 0) {
+    // Surface psql's real error (syntax error, permission denied, relation does
+    // not exist, connection refused…) — that's exactly what the agent needs to
+    // debug. psql doesn't echo the password in these messages.
+    const detail = (result.stderr || "").trim().replace(/\s+/g, " ").slice(0, 500);
+    throw new Error(detail ? `${operation} failed: ${detail}` : `${operation} failed (exit ${result.status})`);
   }
 
   return { stdout: result.stdout, stderr: result.stderr, status: result.status };
