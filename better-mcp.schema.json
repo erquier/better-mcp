@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/erquier/better-mcp/main/better-mcp.schema.json",
+  "title": "better-mcp",
+  "description": "Configuration schema for better-mcp.json — the project config file for the better-mcp MCP server.",
+  "type": "object",
+  "required": ["project", "root"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Reference to this JSON Schema file for IDE autocompletion.",
+      "examples": ["https://raw.githubusercontent.com/erquier/better-mcp/main/better-mcp.schema.json"]
+    },
+    "project": {
+      "type": "string",
+      "description": "Short identifier for the project. Used in logs and as fallback display name.",
+      "minLength": 1,
+      "examples": ["mi-app", "cuadre", "better-mcp"]
+    },
+    "root": {
+      "type": "string",
+      "description": "Absolute path to the project root directory. All relative paths in fs, resources, and shell commands resolve relative to this.",
+      "examples": ["/home/user/projects/my-app", "/opt/entretrespos"]
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable display name for the project (shown by project_info). Falls back to 'project' if not set.",
+      "examples": ["Mi Aplicación", "Better MCP Server"]
+    },
+    "description": {
+      "type": "string",
+      "description": "Brief description of the project, returned by project_info.",
+      "examples": ["Point-of-sale system for retail stores"]
+    },
+    "stack": {
+      "type": "array",
+      "description": "Technology stack tags. Used by project_info to help the AI agent understand the project context.",
+      "items": {
+        "type": "string",
+        "examples": ["nextjs", "prisma", "postgres", "docker", "typescript", "python"]
+      },
+      "uniqueItems": true,
+      "examples": [["nextjs", "prisma", "postgres", "docker"]]
+    },
+    "tools": {
+      "type": "object",
+      "description": "Tool category configuration. Each section enables/disables and configures a group of MCP tools.",
+      "properties": {
+        "fs": {
+          "type": "object",
+          "description": "Filesystem tools: fs_read, fs_write, fs_search, fs_list. If omitted, no fs_* tools are exposed.",
+          "required": ["allowedPaths"],
+          "properties": {
+            "allowedPaths": {
+              "type": "array",
+              "description": "Absolute paths the filesystem tools are allowed to access. Path traversal outside these is blocked.",
+              "items": {
+                "type": "string",
+                "description": "An absolute directory path."
+              },
+              "minItems": 1,
+              "examples": [["/home/user/projects/my-app"], ["/opt/entretrespos", "/shared/data"]]
+            },
+            "maxFileSize": {
+              "type": "number",
+              "description": "Maximum file size in bytes that can be read. Files exceeding this throw an error. Default: 52428800 (50 MB).",
+              "minimum": 1,
+              "default": 52428800,
+              "examples": [1048576, 10485760]
+            }
+          },
+          "additionalProperties": false,
+          "examples": [
+            {
+              "allowedPaths": ["/home/user/projects/my-app"],
+              "maxFileSize": 10485760
+            }
+          ]
+        },
+        "db": {
+          "type": "object",
+          "description": "Database tools: db_query, db_schema. If omitted, no db_* tools are exposed. Requires psql to be installed.",
+          "required": ["url"],
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "PostgreSQL connection URL. Supports ${ENV_VAR} syntax for environment variable resolution at runtime. Must start with postgres://, postgresql://, or psql://.",
+              "minLength": 1,
+              "examples": ["${DATABASE_URL}", "postgres://user:pass@localhost:5432/mydb"]
+            },
+            "readOnly": {
+              "type": "boolean",
+              "description": "If true, only SELECT and WITH queries are allowed. Write queries (INSERT, UPDATE, DELETE, DROP, etc.) are rejected. Default: true.",
+              "default": true,
+              "examples": [true, false]
+            },
+            "schemas": {
+              "type": "array",
+              "description": "Schema filter for db_schema. If not set, defaults to ['public']. Only valid SQL identifiers (alphanumeric + underscores) are accepted.",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+                "examples": ["public", "app", "analytics"]
+              },
+              "uniqueItems": true,
+              "examples": [["public"], ["public", "app"]]
+            },
+            "maxRows": {
+              "type": "number",
+              "description": "Maximum number of rows returned by db_query. Results exceeding this are truncated. Default: 500.",
+              "minimum": 1,
+              "default": 500,
+              "examples": [500, 1000, 100]
+            }
+          },
+          "additionalProperties": false,
+          "examples": [
+            {
+              "url": "${DATABASE_URL}",
+              "readOnly": true,
+              "schemas": ["public"],
+              "maxRows": 500
+            }
+          ]
+        },
+        "shell": {
+          "type": "object",
+          "description": "Shell tools: shell_run, shell_raw (if enabled). If omitted, no shell_* tools are exposed.",
+          "required": ["commands"],
+          "properties": {
+            "commands": {
+              "type": "object",
+              "description": "Map of named commands (key → shell command string). Keys are the command names used with shell_run. Values are the actual shell commands to execute.",
+              "minProperties": 1,
+              "patternProperties": {
+                "^[a-zA-Z0-9_-]+$": {
+                  "type": "string",
+                  "description": "Shell command to execute when the command name is invoked.",
+                  "minLength": 1,
+                  "maxLength": 10000,
+                  "examples": ["npx tsc --noEmit", "docker compose build", "pnpm test"]
+                }
+              },
+              "additionalProperties": false,
+              "examples": [
+                {
+                  "tsc": "npx tsc --noEmit",
+                  "build": "docker compose build",
+                  "test": "pnpm test",
+                  "deploy": "./scripts/deploy.sh"
+                }
+              ]
+            },
+            "allowRaw": {
+              "type": "boolean",
+              "description": "If true, exposes shell_raw which allows executing arbitrary shell commands. Raw commands are validated and restricted (no backticks, no newlines, max 10000 chars). Default: false.",
+              "default": false,
+              "examples": [false, true]
+            }
+          },
+          "additionalProperties": false,
+          "examples": [
+            {
+              "commands": {
+                "tsc": "npx tsc --noEmit",
+                "test": "pnpm test",
+                "build": "docker compose build"
+              },
+              "allowRaw": false
+            }
+          ]
+        },
+        "git": {
+          "type": "object",
+          "description": "Git tools: git_status, git_log, git_diff. If omitted, git tools are still exposed by default (with defaults). Set enabled: false to disable all git tools.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable or disable all git tools. Default: true.",
+              "default": true,
+              "examples": [true, false]
+            },
+            "maxCommits": {
+              "type": "number",
+              "description": "Maximum number of commits returned by git_log (default: 50, clamped to 1000 max).",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 50,
+              "examples": [50, 100, 10]
+            }
+          },
+          "additionalProperties": false,
+          "examples": [
+            { "enabled": true, "maxCommits": 50 },
+            { "enabled": false }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "examples": [{
+        "fs": {
+          "allowedPaths": ["/home/user/projects/my-app"],
+          "maxFileSize": 10485760
+        },
+        "db": {
+          "url": "${DATABASE_URL}",
+          "readOnly": true,
+          "schemas": ["public"],
+          "maxRows": 500
+        },
+        "shell": {
+          "commands": {
+            "tsc": "npx tsc --noEmit",
+            "test": "pnpm test",
+            "build": "docker compose build"
+          },
+          "allowRaw": false
+        },
+        "git": {
+          "enabled": true,
+          "maxCommits": 50
+        }
+      }]
+    },
+    "resources": {
+      "type": "object",
+      "description": "Map of named resource references (name → file path). Resources are accessible via read_resource tool and MCP resource protocol. Paths can be absolute or relative to project root.",
+      "minProperties": 1,
+      "patternProperties": {
+        "^[a-zA-Z0-9_-]+$": {
+          "type": "string",
+          "description": "Path to the resource file or directory (absolute or relative to project root).",
+          "minLength": 1,
+          "examples": ["HANDOFF.md", "docs/", "prisma/schema.prisma", "docs/plans/"]
+        }
+      },
+      "additionalProperties": false,
+      "examples": [
+        {
+          "handoff": "HANDOFF.md",
+          "docs": "docs/",
+          "schema": "prisma/schema.prisma"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "$schema": "https://raw.githubusercontent.com/erquier/better-mcp/main/better-mcp.schema.json",
+      "project": "mi-app",
+      "root": "/home/user/projects/mi-app",
+      "name": "Mi Aplicación",
+      "description": "Web application for inventory management",
+      "stack": ["nextjs", "prisma", "postgres", "docker"],
+      "tools": {
+        "fs": {
+          "allowedPaths": ["/home/user/projects/mi-app"],
+          "maxFileSize": 10485760
+        },
+        "db": {
+          "url": "${DATABASE_URL}",
+          "readOnly": true,
+          "schemas": ["public"],
+          "maxRows": 500
+        },
+        "shell": {
+          "commands": {
+            "tsc": "npx tsc --noEmit",
+            "build": "docker compose build",
+            "test": "pnpm test",
+            "lint": "pnpm lint",
+            "deploy": "./scripts/deploy.sh"
+          },
+          "allowRaw": false
+        },
+        "git": {
+          "enabled": true,
+          "maxCommits": 50
+        }
+      },
+      "resources": {
+        "handoff": "HANDOFF.md",
+        "docs": "docs/",
+        "schema": "prisma/schema.prisma"
+      }
+    }
+  ]
+}

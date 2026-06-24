@@ -1,4 +1,7 @@
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
+
+const MAX_GIT_OUTPUT = 10 * 1024 * 1024; // 10 MB
+const MAX_LOG_LIMIT = 1000;
 
 export interface GitStatus {
   branch: string;
@@ -29,15 +32,19 @@ export interface GitLogEntry {
 export function status(workdir: string): GitStatus {
   ensureGitRepo(workdir);
 
-  const branch = execSync("git rev-parse --abbrev-ref HEAD 2>/dev/null", {
+  const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
     cwd: workdir,
     encoding: "utf-8",
+    timeout: 15_000,
+    maxBuffer: MAX_GIT_OUTPUT,
   }).trim();
 
   // Check if clean
-  const porcelain = execSync("git status --porcelain", {
+  const porcelain = execFileSync("git", ["status", "--porcelain"], {
     cwd: workdir,
     encoding: "utf-8",
+    timeout: 15_000,
+    maxBuffer: MAX_GIT_OUTPUT,
   }).trim();
   const isClean = porcelain.length === 0;
 
@@ -60,9 +67,10 @@ export function status(workdir: string): GitStatus {
   let ahead = 0;
   let behind = 0;
   try {
-    const revList = execSync(
-      "git rev-list --left-right --count HEAD...@{upstream} 2>/dev/null",
-      { cwd: workdir, encoding: "utf-8" }
+    const revList = execFileSync(
+      "git",
+      ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+      { cwd: workdir, encoding: "utf-8", timeout: 15_000, maxBuffer: MAX_GIT_OUTPUT }
     ).trim();
     if (revList) {
       const parts = revList.split("\t");
@@ -78,9 +86,10 @@ export function status(workdir: string): GitStatus {
   // Last commit
   let lastCommit: GitStatus["lastCommit"] = null;
   try {
-    const log = execSync(
-      'git log -1 --format="%H%n%s%n%an%n%ai" 2>/dev/null',
-      { cwd: workdir, encoding: "utf-8" }
+    const log = execFileSync(
+      "git",
+      ["log", "-1", "--format=%H%n%s%n%an%n%ai"],
+      { cwd: workdir, encoding: "utf-8", timeout: 15_000, maxBuffer: MAX_GIT_OUTPUT }
     ).trim();
     if (log) {
       const parts = log.split("\n");
@@ -107,9 +116,13 @@ export function log(
 ): GitLogEntry[] {
   ensureGitRepo(workdir);
 
-  const output = execSync(
-    `git log --max-count=${limit} --format="%H%n%s%n%an%n%ai%n---" 2>/dev/null`,
-    { cwd: workdir, encoding: "utf-8" }
+  // Clamp and validate limit
+  const safeLimit = Math.max(1, Math.min(limit, MAX_LOG_LIMIT));
+
+  const output = execFileSync(
+    "git",
+    ["log", `--max-count=${safeLimit}`, "--format=%H%n%s%n%an%n%ai%n---"],
+    { cwd: workdir, encoding: "utf-8", timeout: 15_000, maxBuffer: MAX_GIT_OUTPUT }
   ).trim();
 
   if (!output) return [];
@@ -140,25 +153,43 @@ export function diff(
 ): { files: string[]; patch: string } {
   ensureGitRepo(workdir);
 
+  // Validate target: only allow valid git refs (alphanumeric, dots, dashes, underscores, slashes, colons)
   const diffTarget = target || "HEAD";
-  const filesCmd = `git diff --name-only ${diffTarget} 2>/dev/null`;
-  const patchCmd = `git diff ${diffTarget} 2>/dev/null`;
+  if (typeof diffTarget !== "string" || diffTarget.length > 500) {
+    throw new Error("Invalid git diff target");
+  }
 
-  const files = execSync(filesCmd, { cwd: workdir, encoding: "utf-8" })
+  // Reject dangerous patterns in git refs
+  if (/[\x00-\x1f\x7f"';$`|&(){}<>#!]/.test(diffTarget)) {
+    throw new Error("Invalid git diff target: contains prohibited characters");
+  }
+
+  // Use execFileSync with arguments array to prevent command injection
+  const files = execFileSync(
+    "git",
+    ["diff", "--name-only", diffTarget],
+    { cwd: workdir, encoding: "utf-8", timeout: 15_000, maxBuffer: MAX_GIT_OUTPUT }
+  )
     .trim()
     .split("\n")
     .filter(Boolean);
 
-  const patch = execSync(patchCmd, { cwd: workdir, encoding: "utf-8" }).trim();
+  const patch = execFileSync(
+    "git",
+    ["diff", diffTarget],
+    { cwd: workdir, encoding: "utf-8", timeout: 15_000, maxBuffer: MAX_GIT_OUTPUT }
+  ).trim();
 
   return { files, patch };
 }
 
 function ensureGitRepo(workdir: string): void {
   try {
-    execSync("git rev-parse --git-dir 2>/dev/null", {
+    execFileSync("git", ["rev-parse", "--git-dir"], {
       cwd: workdir,
       encoding: "utf-8",
+      timeout: 10_000,
+      maxBuffer: 1024 * 1024,
     });
   } catch {
     throw new Error("Not a git repository");

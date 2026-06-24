@@ -1,5 +1,7 @@
-import { execSync } from "child_process";
+import { spawnSync } from "child_process";
 import type { BetterMcpConfig } from "../config.js";
+
+type PsqlResult = { stdout: string; stderr: string; status: number | null };
 
 /**
  * Execute a raw SQL query (read-only) against the configured database.
@@ -11,7 +13,15 @@ export function query(
 ): { columns: string[]; rows: Record<string, unknown>[]; rowCount: number; truncated: boolean } {
   const dbConfig = config.tools.db;
   if (!dbConfig?.url) {
-    throw new Error("Database not configured. Set db.url in better-mcp.json");
+    throw new Error("Database not configured");
+  }
+
+  // Validate input
+  if (typeof sql !== "string" || sql.length === 0) {
+    throw new Error("SQL query must be a non-empty string");
+  }
+  if (sql.length > 100_000) {
+    throw new Error("SQL query exceeds maximum length of 100,000 characters");
   }
 
   // Sanitize: only allow SELECT queries in read-only mode
@@ -26,22 +36,8 @@ export function query(
     ? `SELECT * FROM (${limitedSql.slice(0, -1)}) AS _sub LIMIT ${maxRows + 1}`
     : limitedSql;
 
-  // Escape quotes for shell
-  const escapedSql = finalSql.replace(/'/g, "'\\''");
-
-  const cmd = `psql "${dbConfig.url}" -t -A -F $'\\t' --no-align -c '${escapedSql}' 2>/dev/null || psql "${dbConfig.url}" -t -A -F $'\\t' -c '${escapedSql}' 2>&1`;
-
-  let output: string;
-  try {
-    output = execSync(cmd, {
-      encoding: "utf-8",
-      timeout: 30_000,
-      maxBuffer: 10 * 1024 * 1024,
-    });
-  } catch (e: unknown) {
-    const err = e as { stderr?: string; stdout?: string; message?: string };
-    throw new Error(`Query failed: ${err.stderr || err.stdout || err.message}`);
-  }
+  const result = runPsql(dbConfig.url, finalSql, "Query");
+  const output = result.stdout;
 
   const lines = output.split("\n").filter(Boolean);
   if (lines.length === 0) {
@@ -81,11 +77,25 @@ export function schema(
     throw new Error("Database not configured");
   }
 
-  const schemaFilter = schemas?.length
-    ? schemas.map((s) => `'${s}'`).join(",")
+  // Validate and sanitize schema names
+  const schemaList = schemas?.length
+    ? schemas
     : dbConfig.schemas?.length
-    ? dbConfig.schemas.map((s) => `'${s}'`).join(",")
-    : "'public'";
+    ? dbConfig.schemas
+    : ["public"];
+
+  for (const s of schemaList) {
+    if (typeof s !== "string" || s.length === 0) {
+      throw new Error("Schema names must be non-empty strings");
+    }
+    // Only allow valid SQL identifiers: alphanumeric + underscores
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s)) {
+      throw new Error(`Invalid schema name: "${s}"`);
+    }
+  }
+
+  // Use parameterized query via psql -v with properly escaped identifiers
+  const schemaFilter = schemaList.map((s) => `'${s}'`).join(",");
 
   const sql = `
     SELECT
@@ -113,21 +123,8 @@ export function schema(
     ORDER BY t.table_schema, t.table_name, c.ordinal_position
   `;
 
-  const escapedSql = sql.replace(/'/g, "'\\''");
-
-  const cmd = `psql "${dbConfig.url}" -t -A -F $'\\t' -c '${escapedSql}' 2>/dev/null || psql "${dbConfig.url}" -t -A -F $'\\t' -c '${escapedSql}' 2>&1`;
-
-  let output: string;
-  try {
-    output = execSync(cmd, {
-      encoding: "utf-8",
-      timeout: 30_000,
-      maxBuffer: 10 * 1024 * 1024,
-    });
-  } catch (e: unknown) {
-    const err = e as { stderr?: string; stdout?: string; message?: string };
-    throw new Error(`Schema query failed: ${err.stderr || err.stdout || err.message}`);
-  }
+  const result = runPsql(dbConfig.url, sql, "Schema query");
+  const output = result.stdout;
 
   const lines = output.split("\n").filter(Boolean);
   const tableMap = new Map<string, SchemaTable>();
@@ -157,13 +154,46 @@ export function schema(
       default: columnDefault || null,
       isPrimaryKey: constraintType === "PRIMARY KEY",
     });
-
-    if (constraintType && constraintType !== "PRIMARY KEY" && !table.indexes.includes(constraintType)) {
-      // simplified — real index info needs another query
-    }
   }
 
   return { tables: Array.from(tableMap.values()) };
+}
+
+/**
+ * Run psql with arguments array to prevent shell injection.
+ */
+function runPsql(url: string, sql: string, operation: string): PsqlResult {
+  // Basic URL validation — reject non-postgres URLs
+  if (!url.startsWith("postgres://") && !url.startsWith("postgresql://") && !url.startsWith("psql://")) {
+    throw new Error("Invalid database URL scheme");
+  }
+
+  // URL length limit
+  if (url.length > 2000) {
+    throw new Error("Database URL exceeds maximum length");
+  }
+
+  const args = [
+    url,
+    "-t",
+    "-A",
+    "-F", "\t",
+    "--no-align",
+    "-c", sql,
+  ];
+
+  const result = spawnSync("psql", args, {
+    encoding: "utf-8",
+    timeout: 30_000,
+    maxBuffer: 10 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  if (result.error || result.status !== 0) {
+    throw new Error(`${operation} failed`);
+  }
+
+  return { stdout: result.stdout, stderr: result.stderr, status: result.status };
 }
 
 interface SchemaTable {

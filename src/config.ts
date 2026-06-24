@@ -31,7 +31,17 @@ export interface BetterMcpConfig {
 }
 
 export function resolveEnv(value: string): string {
-  return value.replace(/\$\{(\w+)\}/g, (_, key) => process.env[key] ?? "");
+  if (value.length > 5000) {
+    return value;
+  }
+  return value.replace(/\$\{(\w+)\}/g, (_, key) => {
+    const envVal = process.env[key];
+    // Limit env var value length to prevent expansion bombs
+    if (envVal && envVal.length > 10000) {
+      return "";
+    }
+    return envVal ?? "";
+  });
 }
 
 export function loadConfig(configPath?: string): BetterMcpConfig {
@@ -55,9 +65,7 @@ export function loadConfig(configPath?: string): BetterMcpConfig {
     }
   }
 
-  throw new Error(
-    `better-mcp.json not found. Searched: ${paths.join(", ")}`
-  );
+  throw new Error("Config file (better-mcp.json) not found");
 }
 
 function validateConfig(config: BetterMcpConfig): void {

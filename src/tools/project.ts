@@ -167,7 +167,7 @@ export function readResource(
   const fullPath = isAbsolute(relPath) ? relPath : resolve(config.root, relPath);
 
   if (!existsSync(fullPath)) {
-    throw new Error(`Resource file not found: ${fullPath}`);
+    throw new Error(`Resource file not found: "${name}"`);
   }
 
   const content = readFileSync(fullPath, "utf-8");

@@ -214,14 +214,23 @@ export async function startServer(configPath?: string): Promise<void> {
     const root = config.root;
 
     try {
+      // Validate args is an object if present
+      if (args !== undefined && (typeof args !== "object" || args === null || Array.isArray(args))) {
+        throw new Error("Invalid arguments: expected an object");
+      }
+
       switch (name) {
         // ── Filesystem ──
         case "fs_read": {
-          const path = args?.path as string;
-          const offset = (args?.offset as number) ?? 1;
-          const limit = Math.min((args?.limit as number) ?? 500, 2000);
+          const path = args?.path;
+          if (typeof path !== "string" || path.length === 0) {
+            throw new Error("fs_read requires a non-empty string 'path'");
+          }
+          const offset = typeof args?.offset === "number" && Number.isFinite(args.offset) ? Math.max(1, Math.floor(args.offset)) : 1;
+          const limit = typeof args?.limit === "number" && Number.isFinite(args.limit) ? Math.min(Math.max(1, Math.floor(args.limit)), 2000) : 500;
           const allowed = config.tools.fs?.allowedPaths || [root];
-          const result = fs.readFile(path, allowed, offset, limit);
+          const maxFileSize = config.tools.fs?.maxFileSize;
+          const result = fs.readFile(path, allowed, offset, limit, maxFileSize);
           return {
             content: [
               { type: "text", text: JSON.stringify(result) },
@@ -230,8 +239,14 @@ export async function startServer(configPath?: string): Promise<void> {
         }
 
         case "fs_write": {
-          const path = args?.path as string;
-          const content = args?.content as string;
+          const path = args?.path;
+          if (typeof path !== "string" || path.length === 0) {
+            throw new Error("fs_write requires a non-empty string 'path'");
+          }
+          const content = args?.content;
+          if (typeof content !== "string") {
+            throw new Error("fs_write requires a string 'content'");
+          }
           const allowed = config.tools.fs?.allowedPaths || [root];
           const result = fs.writeFile(path, content, allowed);
           return {
@@ -242,9 +257,12 @@ export async function startServer(configPath?: string): Promise<void> {
         }
 
         case "fs_search": {
-          const pattern = args?.pattern as string;
-          const fileGlob = args?.fileGlob as string | undefined;
-          const limit = (args?.limit as number) ?? 50;
+          const pattern = args?.pattern;
+          if (typeof pattern !== "string" || pattern.length === 0) {
+            throw new Error("fs_search requires a non-empty string 'pattern'");
+          }
+          const fileGlob = typeof args?.fileGlob === "string" ? args.fileGlob : undefined;
+          const limit = typeof args?.limit === "number" && Number.isFinite(args.limit) ? Math.max(1, Math.floor(args.limit)) : 50;
           const allowed = config.tools.fs?.allowedPaths || [root];
           const result = fs.searchFiles(pattern, allowed, fileGlob, limit);
           return {
@@ -255,7 +273,10 @@ export async function startServer(configPath?: string): Promise<void> {
         }
 
         case "fs_list": {
-          const path = args?.path as string;
+          const path = args?.path;
+          if (typeof path !== "string" || path.length === 0) {
+            throw new Error("fs_list requires a non-empty string 'path'");
+          }
           const allowed = config.tools.fs?.allowedPaths || [root];
           const result = fs.listDirectory(path, allowed);
           return {
@@ -267,7 +288,10 @@ export async function startServer(configPath?: string): Promise<void> {
 
         // ── Database ──
         case "db_query": {
-          const sql = args?.sql as string;
+          const sql = args?.sql;
+          if (typeof sql !== "string" || sql.length === 0) {
+            throw new Error("db_query requires a non-empty string 'sql'");
+          }
           const maxRows = config.tools.db?.maxRows ?? 500;
           const result = db.query(sql, config, maxRows);
           return {
@@ -278,7 +302,19 @@ export async function startServer(configPath?: string): Promise<void> {
         }
 
         case "db_schema": {
-          const schemas = args?.schemas as string[] | undefined;
+          const rawSchemas = args?.schemas;
+          let schemas: string[] | undefined;
+          if (rawSchemas !== undefined) {
+            if (!Array.isArray(rawSchemas)) {
+              throw new Error("db_schema 'schemas' must be an array of strings");
+            }
+            schemas = rawSchemas.map((s: unknown) => {
+              if (typeof s !== "string") {
+                throw new Error("db_schema 'schemas' must be an array of strings");
+              }
+              return s;
+            });
+          }
           const result = db.schema(config, schemas);
           return {
             content: [
@@ -289,7 +325,10 @@ export async function startServer(configPath?: string): Promise<void> {
 
         // ── Shell ──
         case "shell_run": {
-          const cmd = args?.command as string;
+          const cmd = args?.command;
+          if (typeof cmd !== "string" || cmd.length === 0) {
+            throw new Error("shell_run requires a non-empty string 'command'");
+          }
           const result = shell.runCommand(cmd, config);
           return {
             content: [
@@ -307,8 +346,11 @@ export async function startServer(configPath?: string): Promise<void> {
         }
 
         case "shell_raw": {
-          const rawCmd = args?.command as string;
-          const timeout = (args?.timeout as number) ?? 120;
+          const rawCmd = args?.command;
+          if (typeof rawCmd !== "string" || rawCmd.length === 0) {
+            throw new Error("shell_raw requires a non-empty string 'command'");
+          }
+          const timeout = typeof args?.timeout === "number" && Number.isFinite(args.timeout) ? Math.max(1, Math.floor(args.timeout)) : 120;
           const result = shell.runRaw(rawCmd, config, timeout);
           return {
             content: [
@@ -336,7 +378,7 @@ export async function startServer(configPath?: string): Promise<void> {
         }
 
         case "git_log": {
-          const limit = (args?.limit as number) ?? 10;
+          const limit = typeof args?.limit === "number" && Number.isFinite(args.limit) ? Math.max(1, Math.floor(args.limit)) : 10;
           const result = git.log(root, limit);
           return {
             content: [
@@ -346,7 +388,7 @@ export async function startServer(configPath?: string): Promise<void> {
         }
 
         case "git_diff": {
-          const target = args?.target as string | undefined;
+          const target = typeof args?.target === "string" && args.target.length > 0 ? args.target : undefined;
           const result = git.diff(root, target);
           return {
             content: [
@@ -366,7 +408,10 @@ export async function startServer(configPath?: string): Promise<void> {
         }
 
         case "read_resource": {
-          const resourceName = args?.name as string;
+          const resourceName = args?.name;
+          if (typeof resourceName !== "string" || resourceName.length === 0) {
+            throw new Error("read_resource requires a non-empty string 'name'");
+          }
           const result = project.readResource(resourceName, config);
           return {
             content: [

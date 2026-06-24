@@ -1,0 +1,11 @@
+node_modules
+dist
+.git
+*.md
+test-config.json
+.gitignore
+pnpm-lock.yaml
+.gitkeep
+.env
+.env.*
+*.log

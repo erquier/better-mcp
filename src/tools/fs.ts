@@ -1,6 +1,10 @@
-import { execSync } from "child_process";
-import { existsSync } from "fs";
-import { resolve, relative, isAbsolute, sep } from "path";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, realpathSync } from "fs";
+import { resolve, isAbsolute, sep, relative } from "path";
+import { execFileSync } from "child_process";
+
+const DEFAULT_MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
+const MAX_SEARCH_LIMIT = 500;
+const MAX_LIST_DIRECTORY_LIMIT = 10000;
 
 /**
  * Read a file with pagination support.
@@ -9,10 +13,21 @@ export function readFile(
   filePath: string,
   allowedPaths: string[],
   offset = 1,
-  limit = 500
+  limit = 500,
+  maxFileSize?: number
 ): { content: string; totalLines: number; fileSize: number } {
   const abs = resolvePath(filePath, allowedPaths);
-  const content = execSync(`cat "${abs}"`, { encoding: "utf-8" });
+  const maxSize = maxFileSize ?? DEFAULT_MAX_FILE_SIZE;
+
+  // Check file size before reading
+  const stats = statSync(abs);
+  if (stats.size > maxSize) {
+    throw new Error(
+      `File too large: ${stats.size} bytes exceeds limit of ${maxSize} bytes`
+    );
+  }
+
+  const content = readFileSync(abs, { encoding: "utf-8" });
   const lines = content.split("\n");
   const totalLines = lines.length;
   const fileSize = Buffer.byteLength(content, "utf-8");
@@ -37,9 +52,18 @@ export function writeFile(
   allowedPaths: string[]
 ): { path: string; bytesWritten: number } {
   const abs = resolvePath(filePath, allowedPaths);
+
+  // Limit total write size to 10MB
+  if (Buffer.byteLength(content, "utf-8") > 10 * 1024 * 1024) {
+    throw new Error("Write content exceeds maximum allowed size of 10MB");
+  }
+
   const dir = abs.split(sep).slice(0, -1).join(sep);
-  execSync(`mkdir -p "${dir}"`, { encoding: "utf-8" });
-  execSync(`cat > "${abs}"`, { input: content, encoding: "utf-8" });
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+
+  writeFileSync(abs, content, { encoding: "utf-8" });
   return { path: abs, bytesWritten: Buffer.byteLength(content, "utf-8") };
 }
 
@@ -52,15 +76,58 @@ export function searchFiles(
   fileGlob?: string,
   limit = 50
 ): { matches: { file: string; line: number; content: string }[] } {
-  const searchPath = allowedPaths.map((p) => `"${p}"`).join(" ");
-  const globFilter = fileGlob ? `--glob "${fileGlob}"` : "";
-  const cmd = `rg --no-heading --line-number --max-count 5 ${globFilter} -m ${limit} "${pattern}" ${searchPath} 2>/dev/null || true`;
+  // Validate and sanitize inputs
+  if (typeof pattern !== "string" || pattern.length === 0) {
+    throw new Error("Search pattern must be a non-empty string");
+  }
+  if (pattern.length > 500) {
+    throw new Error("Search pattern exceeds maximum length of 500 characters");
+  }
 
-  const output = execSync(cmd, { encoding: "utf-8" });
+  const safeLimit = Math.min(Math.max(1, limit), MAX_SEARCH_LIMIT);
+
+  // Build args array to avoid shell injection
+  const args: string[] = [
+    "--no-heading",
+    "--line-number",
+    "--max-count", String(safeLimit),
+    pattern,
+    ...allowedPaths,
+  ];
+
+  if (fileGlob) {
+    // Validate fileGlob: only allow safe characters
+    if (typeof fileGlob !== "string" || fileGlob.length > 200) {
+      throw new Error("Invalid file glob pattern");
+    }
+    // Only allow alphanumeric, dots, stars, dashes, underscores, slashes, and the extension pattern
+    if (!/^[\w.*\-_/?]+$/.test(fileGlob)) {
+      throw new Error("File glob contains invalid characters");
+    }
+    args.push("--glob", fileGlob);
+  }
+
+  let output: string;
+  try {
+    output = execFileSync("rg", args, {
+      encoding: "utf-8",
+      timeout: 30_000,
+      maxBuffer: 10 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (e: unknown) {
+    // rg returns exit code 1 when no matches — not an error
+    const err = e as { stderr?: string; stdout?: string; status?: number; message?: string };
+    if (err.status === 1) {
+      return { matches: [] };
+    }
+    throw new Error("Search failed");
+  }
+
   const matches = output
     .split("\n")
     .filter(Boolean)
-    .slice(0, limit)
+    .slice(0, safeLimit)
     .map((line) => {
       const sepIdx = line.indexOf(":");
       const sepIdx2 = line.indexOf(":", sepIdx + 1);
@@ -84,40 +151,65 @@ export function listDirectory(
   allowedPaths: string[]
 ): { name: string; type: "file" | "dir" | "symlink"; size: number }[] {
   const abs = resolvePath(dirPath, allowedPaths);
-  const output = execSync(
-    `ls -1a "${abs}" 2>/dev/null && echo "---TYPES---" && stat --format="%F:%s:%n" "${abs}"/* "${abs}"/.* 2>/dev/null || true`,
-    { encoding: "utf-8" }
-  );
-  return output
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      const parts = line.split(":");
-      if (parts.length < 3) return null;
-      const type = parts[0].includes("directory")
-        ? ("dir" as const)
-        : parts[0].includes("symlink")
-        ? ("symlink" as const)
-        : ("file" as const);
-      return {
-        name: parts.slice(2).join(":"),
-        type,
-        size: parseInt(parts[1], 10),
-      };
-    })
-    .filter((e): e is NonNullable<typeof e> => e !== null);
+
+  const entries = readdirSync(abs, { withFileTypes: true });
+  const results: { name: string; type: "file" | "dir" | "symlink"; size: number }[] = [];
+
+  for (const entry of entries) {
+    if (results.length >= MAX_LIST_DIRECTORY_LIMIT) break;
+    try {
+      const fullPath = resolve(abs, entry.name);
+      const stats = statSync(fullPath);
+      let type: "file" | "dir" | "symlink";
+      if (entry.isSymbolicLink()) {
+        type = "symlink";
+      } else if (entry.isDirectory()) {
+        type = "dir";
+      } else {
+        type = "file";
+      }
+      results.push({ name: entry.name, type, size: stats.size });
+    } catch {
+      // Skip inaccessible entries
+    }
+  }
+
+  return results;
 }
 
 function resolvePath(filePath: string, allowedPaths: string[]): string {
+  // Validate input type
+  if (typeof filePath !== "string" || filePath.length === 0) {
+    throw new Error("File path must be a non-empty string");
+  }
+
+  // Reject null bytes and path traversal sequences
+  if (filePath.includes("\0")) {
+    throw new Error("File path contains null bytes");
+  }
+
+  // Resolve to absolute path (handles ../.. traversal)
   const abs = isAbsolute(filePath)
-    ? filePath
+    ? resolve(filePath)
     : resolve(process.cwd(), filePath);
 
-  const allowed = allowedPaths.some((p) => abs.startsWith(p));
+  // Ensure the resolved path doesn't escape via symlinks
+  let realAbs: string;
+  try {
+    realAbs = realpathSync(abs);
+  } catch {
+    // If realpath fails (e.g., file doesn't exist), use the resolved path
+    realAbs = abs;
+  }
+
+  // Check if the real path is within any of the allowed paths
+  const allowed = allowedPaths.some((p) => {
+    const resolvedAllowed = resolve(p);
+    return realAbs.startsWith(resolvedAllowed + sep) || realAbs === resolvedAllowed;
+  });
+
   if (!allowed) {
-    throw new Error(
-      `Access denied: "${filePath}" is not within allowed paths: ${allowedPaths.join(", ")}`
-    );
+    throw new Error("Access denied: path is not within allowed paths");
   }
 
   return abs;
