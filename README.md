@@ -6,10 +6,9 @@ better-mcp es un **MCP server universal** que cualquier agente (Hermes, Claude C
 
 ```bash
 # Una vez instalado, cualquier agente conectado puede:
-npx better-mcp run         # Arrancar el server MCP
-# → tools: fs_read, fs_write, fs_search, fs_list, db_query, db_schema,
-#          shell_run, shell_raw, git_status, git_log, git_diff,
-#          project_info, read_resource
+npx better-mcp run              # Modo stdio (default)
+npx better-mcp --http --port 3100  # Modo HTTP con SSE
+# → tools: fs_*, db_*, shell_*, git_*, project_*, workspace_*, auth_*, plugin_*
 ```
 
 ---
@@ -400,6 +399,55 @@ Siempre disponible (no requiere config específica).
 }
 ```
 
+### 🔐 Auth (`auth_*`)
+
+| Tool | Args | Descripción | Requiere auth? |
+|---|---|---|---|
+| `auth_confirm(id)` | `confirmationId` | Aprueba una operación pendiente | — |
+| `auth_reject(id)` | `confirmationId` | Rechaza una operación pendiente | — |
+| `auth_status()` | — | Muestra confirmaciones pendientes | — |
+
+**Modos de auth:**
+- `auto` (default): Sin confirmación — operaciones destructivas ejecutan directo
+- `confirm`: Operaciones destructivas retornan `{ blocked: true, confirmationId }` — debes llamar `auth_confirm()` para aprobar
+- `token`: Requieres pasar `confirmationToken` en los args de toda operación destructiva
+- `interactive` (HTTP only): El server envía SSE events pidiendo confirmación
+
+**Operaciones que gatillan auth:**
+- `fs_write`, `fs_delete` — modificación de archivos
+- `shell_run` — comandos con palabras clave: deploy, reset, drop, delete, restart, migrate
+- `shell_raw` — ejecución arbitraria
+- `db_query` — SQL con DROP, ALTER, TRUNCATE, DELETE
+
+### 🏗️ Workspace (`workspace_*`)
+
+| Tool | Args | Descripción |
+|---|---|---|
+| `workspace_list_projects()` | — | Lista todos los proyectos configurados con su stack, root y tools |
+| `workspace_set_project(name)` | `name` | Define el proyecto activo para tools sin `project` explícito |
+
+Cuando la config tiene múltiples proyectos (`projects[]`), todas las tools aceptan un parámetro opcional `project` para operar sobre un proyecto específico. Si se omite, se usa el proyecto default (el primero).
+
+### 🔌 Plugins (`plugin_*`)
+
+Las tools de plugins se registran como `plugin_<nombre>_<tool>`. Se descubren automáticamente del directorio `plugins/`.
+
+**Config:**
+```json
+{
+  "tools": {
+    "plugins": {
+      "dir": "plugins/",
+      "enabled": true,
+      "allowlist": ["my-plugin"],
+      "timeout": 30
+    }
+  }
+}
+```
+
+**Ejemplo incluido:** `plugins/example-echo.ts` — tools `echo` y `greet`.
+
 ---
 
 ## Instalación
@@ -421,9 +469,17 @@ La imagen Docker es **multi-stage**:
 - **Builder stage**: compila TypeScript.
 - **Runner stage**: imagen Alpine minimalista con `postgresql-client` para DB tools.
 
-### Python (futuro)
+### Python — ✅ Disponible
 ```bash
 pip install better-mcp
+```
+
+```python
+from better_mcp import BetterMcpClient
+
+client = BetterMcpClient("http://localhost:3100")
+info = await client.project_info()
+print(info)
 ```
 
 ---
@@ -492,8 +548,12 @@ El config soporta `${VAR_NAME}` que se resuelven del entorno en tiempo de ejecuc
 # Modo automático (busca better-mcp.json en cwd)
 better-mcp
 
-# Modo explícito
+# Modo stdio (default)
 better-mcp run
+
+# Modo HTTP (SSE transport)
+better-mcp --http
+better-mcp --http --port 8080
 
 # Con ruta de config
 better-mcp run path/to/config.json
@@ -525,8 +585,14 @@ better-mcp path/to/config.json
                                           │  ├─ git_status          │
                                           │  ├─ git_log             │
                                           │  ├─ git_diff            │
-                                          │  ├─ project_info        │
-                                          │  └─ read_resource       │
+                                          │  ├─ workspace_list_projects│
+                                          │  ├─ workspace_set_project │
+                                          │  ├─ auth_confirm          │
+                                          │  ├─ auth_reject           │
+                                          │  ├─ auth_status           │
+                                          │  ├─ project_info          │
+                                          │  ├─ read_resource         │
+                                          │  └─ plugin_*              │
                                           │                          │
                                           └──────────┬───────────────┘
                                                      │
@@ -548,6 +614,7 @@ El server corre como proceso stdio (transporte MCP estándar) y expone tools MCP
 
 | Mecanismo | Descripción |
 |---|---|
+| **Auth Gates** | 4 modos: `auto` (sin gates), `confirm` (soft-block + confirmación), `token` (token en args), `interactive` (SSE events) |
 | **Read-only DB** | `db_query` solo ejecuta SELECT/WITH por defecto |
 | **Comandos whitelist** | `shell_run` solo ejecuta comandos definidos en config |
 | **Raw sanitization** | `shell_raw` bloquea backticks y newlines |
@@ -559,7 +626,7 @@ El server corre como proceso stdio (transporte MCP estándar) y expone tools MCP
 | **Input validation** | Todos los inputs de usuario son validados (tipos, longitudes, caracteres) |
 | **Sin dependencias externas** | Solo el SDK MCP oficial |
 
-Para ambientes restrictivos: deshabilitar `shell.allowRaw`, limitar `db.schemas`, o configurar `git.enabled: false`.
+Para ambientes restrictivos: deshabilitar `shell.allowRaw`, limitar `db.schemas`, o configurar `git.enabled: false`. Para ops destructivas, activar `auth.mode: "confirm"` para requerir aprobación explícita.
 
 ---
 
