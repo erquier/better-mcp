@@ -1,6 +1,6 @@
 {
   "name": "@erquier/better-mcp",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "MCP server universal para que agentes de IA interactúen con cualquier proyecto — filesystem, DB, shell, git y project tools.",
   "type": "module",
   "bin": {

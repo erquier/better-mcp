@@ -1,4 +1,6 @@
 import { execFileSync } from "child_process";
+import type { BetterMcpConfig } from "../config.js";
+import type { ToolDefinition, ToolContext } from "../tool-registry.js";
 
 const MAX_GIT_OUTPUT = 10 * 1024 * 1024; // 10 MB
 const MAX_LOG_LIMIT = 1000;
@@ -28,6 +30,8 @@ export interface GitLogEntry {
 
 /**
  * Get the current git status of the project.
+ * Uses --porcelain=v1 -z for NUL-separated output that handles
+ * spaces, special characters, and renames correctly.
  */
 export function status(workdir: string): GitStatus {
   ensureGitRepo(workdir);
@@ -39,13 +43,15 @@ export function status(workdir: string): GitStatus {
     maxBuffer: MAX_GIT_OUTPUT,
   }).trim();
 
-  // Check if clean
-  const porcelain = execFileSync("git", ["status", "--porcelain"], {
+  // Use --porcelain=v1 -z for NUL-separated, machine-parseable output
+  // This correctly handles filenames with spaces, special chars, and renames
+  const porcelain = execFileSync("git", ["status", "--porcelain=v1", "-z"], {
     cwd: workdir,
     encoding: "utf-8",
     timeout: 15_000,
     maxBuffer: MAX_GIT_OUTPUT,
-  }).trim();
+  });
+
   const isClean = porcelain.length === 0;
 
   // Parse staged/unstaged/untracked
@@ -54,12 +60,27 @@ export function status(workdir: string): GitStatus {
   const untracked: string[] = [];
 
   if (!isClean) {
-    for (const line of porcelain.split("\n")) {
-      const status = line.slice(0, 2);
-      const file = line.slice(3);
-      if (status[0] !== " ") staged.push(file);
-      if (status[1] !== " " && status[1] !== "?") unstaged.push(file);
-      if (status[1] === "?") untracked.push(file);
+    // Strip trailing NUL if present, then split on NUL
+    const trimmed = porcelain.replace(/\0+$/, "");
+    const entries = trimmed.split("\0");
+
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      // Minimum length: "XY " is 3 chars
+      if (entry.length < 3) continue;
+
+      const xy = entry.slice(0, 2);
+      const file = entry.slice(3); // skip XY + space separator
+
+      if (xy[0] !== " ") staged.push(file);
+      if (xy[1] !== " " && xy[1] !== "?") unstaged.push(file);
+      if (xy[1] === "?") untracked.push(file);
+
+      // Handle renames (R) and copies (C): the next NUL-delimited entry
+      // is the new filename. Skip it to avoid double-counting.
+      if (xy[0] === "R" || xy[0] === "C") {
+        i++; // skip the next entry (it's the new/destination filename)
+      }
     }
   }
 
@@ -195,3 +216,65 @@ function ensureGitRepo(workdir: string): void {
     throw new Error("Not a git repository");
   }
 }
+
+// ─── Tool Definitions ──────────────────────────────────────────────────────
+
+/**
+ * Get git tool definitions for the MCP server.
+ * Tools are only returned if at least one project has git enabled.
+ */
+export function getToolDefinitions(config: BetterMcpConfig, hasGit: boolean): ToolDefinition[] {
+  if (!hasGit) return [];
+
+  return [
+    {
+      name: "git_status",
+      description: "Get the current git status: branch, clean/dirty, staged/unstaged/untracked files, ahead/behind remote, last commit.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+      requiresAuth: () => false,
+      handler: async (args, ctx) => {
+        const result = status(ctx.project.root);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      },
+    },
+    {
+      name: "git_log",
+      description: "Get recent commit history.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          limit: { type: "number", description: "Max commits (default 10)", default: 10 },
+        },
+      },
+      requiresAuth: () => false,
+      handler: async (args, ctx) => {
+        const limit = typeof args.limit === "number" && Number.isFinite(args.limit)
+          ? Math.max(1, Math.floor(args.limit)) : 10;
+        const result = log(ctx.project.root, limit);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      },
+    },
+    {
+      name: "git_diff",
+      description: "Get diff of changes. Defaults to diff against HEAD.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          target: { type: "string", description: "Git ref to diff against (default: HEAD)" },
+        },
+      },
+      requiresAuth: () => false,
+      handler: async (args, ctx) => {
+        const target = typeof args.target === "string" && args.target.length > 0
+          ? args.target : undefined;
+        const result = diff(ctx.project.root, target);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      },
+    },
+  ];
+}
+
+// Need to import BetterMcpConfig for the type

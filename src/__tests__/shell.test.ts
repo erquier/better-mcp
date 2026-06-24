@@ -1,10 +1,16 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 import { runCommand, runRaw } from "../tools/shell.js";
 import type { BetterMcpConfig } from "../config.js";
 
+const tmpDir = mkdtempSync(join(tmpdir(), "better-mcp-shell-test-"));
+const otherDir = mkdtempSync(join(tmpdir(), "better-mcp-shell-other-"));
+
 const testConfig: BetterMcpConfig = {
   project: "test-project",
-  root: "/tmp/better-mcp",
+  root: tmpDir,
   name: "Test",
   stack: ["typescript", "node"],
   tools: {
@@ -28,13 +34,13 @@ const testConfig: BetterMcpConfig = {
 
 const configNoShell: BetterMcpConfig = {
   project: "test-project",
-  root: "/tmp",
+  root: otherDir,
   tools: {},
 };
 
 const configNoRaw: BetterMcpConfig = {
   project: "test-project",
-  root: "/tmp",
+  root: otherDir,
   tools: {
     shell: {
       commands: {
@@ -90,7 +96,7 @@ describe("runCommand", () => {
   });
 
   it("should accept an optional workdir parameter", () => {
-    const result = runCommand("greet", testConfig, "/tmp");
+    const result = runCommand("greet", testConfig, otherDir);
     expect(result.stdout).toBe("hello world");
     expect(result.exitCode).toBe(0);
   });

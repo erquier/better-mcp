@@ -5,12 +5,12 @@ services:
       dockerfile: Dockerfile
     container_name: better-mcp
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
     volumes:
       - ./:/project:ro
     environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@host.docker.internal:5432/mcp}
-      - MCP_CONFIG_PATH=/project/mcp-config.json
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:***@host.docker.internal:5432/mcp}
+    command: ["--http"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

@@ -155,11 +155,13 @@ export function discoverPluginFiles(pluginsDir: string): string[] {
  * Load a single plugin from a file path.
  * Handles both .ts and .js files via dynamic import.
  * Returns null if loading or validation fails.
+ * Has timeout protection: if the import takes longer than the configured timeout,
+ * the loading is aborted and an error is logged.
  */
-export async function loadPluginFile(filePath: string): Promise<LoadedPlugin | null> {
+export async function loadPluginFile(filePath: string, timeoutMs: number = 10000): Promise<LoadedPlugin | null> {
   try {
-    // Dynamic import — works for .ts with ts-node/tsx, and .js in both dev and prod
-    const mod = await import(filePath);
+    // Dynamic import with timeout protection
+    const mod = await importWithTimeout(filePath, timeoutMs);
 
     // Check for named export 'plugin' (preferred) or default export
     const pluginObj: unknown = mod.plugin ?? mod.default ?? null;
@@ -194,6 +196,30 @@ export async function loadPluginFile(filePath: string): Promise<LoadedPlugin | n
 }
 
 /**
+ * Dynamic import with a timeout guard.
+ * Wraps import() in a Promise.race with a timeout.
+ */
+async function importWithTimeout(filePath: string, timeoutMs: number): Promise<any> {
+  const importPromise = import(filePath);
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    const id = setTimeout(() => {
+      clearTimeout(id);
+      reject(new Error(`Plugin import timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+  return Promise.race([importPromise, timeoutPromise]);
+}
+
+/**
+ * Get the plugin name (without extension) from a file path.
+ */
+function pluginNameFromPath(filePath: string): string {
+  const filename = filePath.split("/").pop() || "";
+  const dotIndex = filename.lastIndexOf(".");
+  return dotIndex > 0 ? filename.substring(0, dotIndex) : filename;
+}
+
+/**
  * Discover and load all plugins from the configured plugins directory.
  * Respects the allowlist (if non-empty, only load matching plugin names).
  * Individual plugin failures are logged and skipped.
@@ -211,23 +237,27 @@ export async function discoverPlugins(
   const dir = pluginsConfig.dir || defaultPluginsDir(rootDir);
   const allowlist = pluginsConfig.allowlist ?? [];
   const hasAllowlist = Array.isArray(allowlist) && allowlist.length > 0;
+  const timeoutMs = (pluginsConfig.timeout ?? 10) * 1000;
 
   const files = discoverPluginFiles(dir);
   const loaded: LoadedPlugin[] = [];
 
   for (const filePath of files) {
-    const plugin = await loadPluginFile(filePath);
+    // 🔒 Filter by filename against allowlist BEFORE importing
+    // This prevents malicious code in a non-allowed plugin from executing during import
+    const pluginName = pluginNameFromPath(filePath);
+    if (hasAllowlist && !allowlist.includes(pluginName)) {
+      console.error(
+        `[plugins] Plugin "${pluginName}" from "${filePath}" not in allowlist, skipping`,
+      );
+      continue;
+    }
+
+    // Now safe to import — the plugin has passed the allowlist check
+    const plugin = await loadPluginFile(filePath, timeoutMs);
 
     if (!plugin) {
       continue; // Already logged by loadPluginFile
-    }
-
-    // Check allowlist
-    if (hasAllowlist && !allowlist.includes(plugin.name)) {
-      console.error(
-        `[plugins] Plugin "${plugin.name}" from "${filePath}" not in allowlist, skipping`,
-      );
-      continue;
     }
 
     loaded.push(plugin);

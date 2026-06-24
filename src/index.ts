@@ -8,6 +8,7 @@ import { runInit } from "./init.js";
 //   better-mcp init [--force]     → write a better-mcp.json auto-detected from cwd, then exit
 //   better-mcp --http             → HTTP/SSE on port 3100
 //   better-mcp --http --port 8080 → HTTP/SSE on port 8080
+//   better-mcp --http --host 0.0.0.0 → bind to all interfaces (default: 127.0.0.1)
 //   better-mcp --config path/to/config.json → loads custom config
 //   better-mcp path/to/config.json → loads custom config (stdio)
 
@@ -22,6 +23,7 @@ if (args[0] === "init") {
 let configPath: string | undefined;
 let transport: "stdio" | "http" | undefined;
 let port: number | undefined;
+let host: string | undefined;
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
@@ -30,6 +32,8 @@ for (let i = 0; i < args.length; i++) {
     transport = "http";
   } else if (arg === "--port" && i + 1 < args.length) {
     port = parseInt(args[++i], 10);
+  } else if (arg === "--host" && i + 1 < args.length) {
+    host = args[++i];
   } else if (arg === "--config" && i + 1 < args.length) {
     configPath = args[++i];
   } else if (arg === "run" && i + 1 < args.length) {
@@ -41,7 +45,7 @@ for (let i = 0; i < args.length; i++) {
   }
 }
 
-startServer(configPath, { transport, port }).catch((err) => {
+startServer(configPath, { transport, port, host }).catch((err) => {
   console.error("better-mcp fatal error:", err);
   process.exit(1);
 });

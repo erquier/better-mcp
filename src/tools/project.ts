@@ -1,6 +1,7 @@
 import { readFileSync, existsSync, readdirSync, statSync } from "fs";
 import { resolve, isAbsolute } from "path";
 import type { BetterMcpConfig } from "../config.js";
+import type { ToolDefinition, ToolContext } from "../tool-registry.js";
 
 /**
  * Get comprehensive project information.
@@ -178,4 +179,149 @@ export function readResource(
 
   const content = readFileSync(fullPath, "utf-8");
   return { name, content, path: fullPath };
+}
+
+// ─── Tool Definitions ──────────────────────────────────────────────────────
+
+/**
+ * Get project-related tool definitions for the MCP server.
+ */
+export function getToolDefinitions(config: BetterMcpConfig, state: { activeProject: string | null }): ToolDefinition[] {
+  const projects: Array<{ name: string; root: string; tools: any; resources?: Record<string, string> }> = [];
+  if (config.projects && config.projects.length > 0) {
+    projects.push(...config.projects);
+  } else if (config.project && config.root) {
+    projects.push({
+      name: config.name || config.project,
+      root: config.root,
+      tools: config.tools || { fs: { allowedPaths: [config.root] } },
+      resources: config.resources,
+    });
+  }
+  const isMultiProject = projects.length > 1;
+  const projectNames = projects.map((p) => p.name).join(", ");
+
+  return [
+    {
+      name: "project_info",
+      description: "Get comprehensive info about a project: stack, structure, file counts, config detection, enabled tools.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+      requiresAuth: () => false,
+      handler: async (args, ctx) => {
+        const result = info(ctx.config, ctx.loadedPlugins.length > 0
+          ? ctx.loadedPlugins.map((p) => ({
+              name: p.name,
+              version: p.version,
+              description: p.description,
+              toolCount: p.tools.length,
+            }))
+          : undefined);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      },
+    },
+    {
+      name: "read_resource",
+      description: "Read a project resource file (handoff, plan, schema, docs).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: {
+            type: "string",
+            description: `Resource name. Available: ${
+              projects
+                .flatMap((p) => (p.resources ? Object.keys(p.resources) : []))
+                .join(", ") || "(none)"
+            }`,
+          },
+        },
+        required: ["name"],
+      },
+      requiresAuth: () => false,
+      handler: async (args, ctx) => {
+        const resourceName = args.name;
+        if (typeof resourceName !== "string" || resourceName.length === 0) {
+          throw new Error("read_resource requires a non-empty string 'name'");
+        }
+        const result = readResource(resourceName, ctx.config);
+        return { content: [{ type: "text", text: result.content }] };
+      },
+    },
+    // ── Workspace tools ──
+    {
+      name: "workspace_list_projects",
+      description: "List all configured projects with their name, root, stack, and enabled tools.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+      requiresAuth: () => false,
+      handler: async (args, ctx) => {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify(
+              projects.map((p) => ({
+                name: p.name,
+                root: p.root,
+                stack: config.stack || [],
+                description: config.description || "",
+                enabledTools: getEnabledToolsList(p.tools),
+                availableCommands: p.tools?.shell?.commands
+                  ? Object.keys(p.tools.shell.commands)
+                  : [],
+                resources: p.resources || {},
+              })),
+            ),
+          }],
+        };
+      },
+    },
+    {
+      name: "workspace_set_project",
+      description: "Set the active project for subsequent tool calls that don't specify a project explicitly.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: {
+            type: "string",
+            description: `Project name to set as active. Available: ${projectNames}`,
+          },
+        },
+        required: ["name"],
+      },
+      requiresAuth: () => false,
+      handler: async (args, ctx) => {
+        const projectName = args.name;
+        if (typeof projectName !== "string" || projectName.length === 0) {
+          throw new Error("workspace_set_project requires a non-empty string 'name'");
+        }
+        // Verify the project exists (will throw if not found)
+        if (config.projects) {
+          const found = config.projects.find((p) => p.name === projectName);
+          if (!found) {
+            throw new Error(
+              `Project "${projectName}" not found. Available: ${config.projects.map((p) => p.name).join(", ")}`,
+            );
+          }
+        }
+        // Update state
+        ctx.state.activeProject = projectName;
+        return {
+          content: [{ type: "text", text: JSON.stringify({ activeProject: projectName }) }],
+        };
+      },
+    },
+  ];
+}
+
+function getEnabledToolsList(tools: any): string[] {
+  const result: string[] = [];
+  if (tools?.fs) result.push("filesystem");
+  if (tools?.db) result.push("database");
+  if (tools?.shell) result.push("shell");
+  if (tools?.git?.enabled !== false) result.push("git");
+  return result;
 }

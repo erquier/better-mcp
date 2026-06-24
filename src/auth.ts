@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -18,6 +18,8 @@ export interface PendingConfirmation {
   args: Record<string, unknown>;
   timestamp: number;
   timeout: number;
+  /** Optional session identifier to bind this confirmation to a specific caller. */
+  sessionId?: string;
 }
 
 export type AuthResult =
@@ -77,8 +79,8 @@ const DANGEROUS_COMMAND_KEYWORDS = [
   "migrate",
 ];
 
-/** SQL keywords that indicate a write/alter operation. */
-const DESTRUCTIVE_SQL_KEYWORDS = ["DROP ", "ALTER ", "TRUNCATE ", "DELETE "];
+/** SQL keywords that are safe (read-only) — everything else requires confirmation. */
+const SAFE_SQL_KEYWORDS = ["SELECT ", "WITH ", "EXPLAIN "];
 
 /**
  * Check if a tool is always destructive.
@@ -97,10 +99,15 @@ export function isDangerousShellCommand(commandName: string): boolean {
 
 /**
  * Check if a SQL query is destructive (non-read-only).
+ * Uses an allowlist: only SELECT, WITH, EXPLAIN are considered safe.
+ * Case-insensitive, handles leading whitespace.
  */
 export function isDestructiveSql(sql: string): boolean {
   const upper = sql.trim().toUpperCase();
-  return DESTRUCTIVE_SQL_KEYWORDS.some((kw) => upper.includes(kw));
+  // If empty, treat as destructive (needs confirmation)
+  if (!upper) return true;
+  // Allowlist: only these keywords are safe
+  return !SAFE_SQL_KEYWORDS.some((kw) => upper.startsWith(kw));
 }
 
 /**
@@ -146,6 +153,7 @@ export function checkAuth(
   args: Record<string, unknown>,
   authConfig: AuthConfig | undefined,
   transportType: "stdio" | "http" = "stdio",
+  sessionId?: string,
 ): AuthResult {
   // No auth config → auto mode (backward compatible)
   if (!authConfig || authConfig.mode === "auto") {
@@ -162,7 +170,31 @@ export function checkAuth(
   // ── Token mode ────────────────────────────────────────────────────
   if (mode === "token") {
     const providedToken = args.confirmationToken;
-    if (typeof providedToken !== "string" || providedToken !== authConfig.token) {
+    if (typeof providedToken !== "string" || !authConfig.token) {
+      return {
+        allowed: false,
+        blocked: true,
+        reason: "Invalid confirmation token",
+      };
+    }
+
+    // Constant-time comparison to prevent timing side-channel attacks
+    const provided = Buffer.from(providedToken, "utf-8");
+    const expected = Buffer.from(authConfig.token, "utf-8");
+
+    if (provided.length !== expected.length) {
+      // Length mismatch: do a dummy comparison of equal length
+      // to avoid leaking the real token length via timing
+      const dummy = Buffer.alloc(expected.length);
+      timingSafeEqual(dummy, dummy);
+      return {
+        allowed: false,
+        blocked: true,
+        reason: "Invalid confirmation token",
+      };
+    }
+
+    if (!timingSafeEqual(provided, expected)) {
       return {
         allowed: false,
         blocked: true,
@@ -182,6 +214,7 @@ export function checkAuth(
       args: { ...args },
       timestamp: Date.now(),
       timeout,
+      sessionId,
     };
     pendingConfirmations.set(id, pending);
     startCleanup();
@@ -208,6 +241,7 @@ export function checkAuth(
         args: { ...args },
         timestamp: Date.now(),
         timeout,
+        sessionId,
       };
       pendingConfirmations.set(id, pending);
       startCleanup();
@@ -232,6 +266,7 @@ export function checkAuth(
       args: { ...args },
       timestamp: Date.now(),
       timeout,
+      sessionId,
     };
     pendingConfirmations.set(id, pending);
     startCleanup();
@@ -254,12 +289,12 @@ export function checkAuth(
 
 /**
  * Approve a pending confirmation and return the stored args.
- * Throws if the confirmation doesn't exist or has expired.
+ * Throws if the confirmation doesn't exist, has expired, or sessionId doesn't match.
  */
-export function confirmOperation(confirmationId: string): {
-  tool: string;
-  args: Record<string, unknown>;
-} {
+export function confirmOperation(
+  confirmationId: string,
+  sessionId?: string,
+): { tool: string; args: Record<string, unknown> } {
   const pending = pendingConfirmations.get(confirmationId);
   if (!pending) {
     throw new Error(
@@ -276,6 +311,13 @@ export function confirmOperation(confirmationId: string): {
     );
   }
 
+  // Verify session binding if the confirmation was tied to a session
+  if (pending.sessionId && pending.sessionId !== sessionId) {
+    throw new Error(
+      `Confirmation "${confirmationId}" is bound to a different session`,
+    );
+  }
+
   pendingConfirmations.delete(confirmationId);
   return { tool: pending.tool, args: pending.args };
 }
@@ -283,11 +325,26 @@ export function confirmOperation(confirmationId: string): {
 /**
  * Reject (remove) a pending confirmation.
  * Returns true if it existed, false otherwise.
+ * Throws if sessionId is required but doesn't match.
  */
-export function rejectOperation(confirmationId: string): boolean {
-  const existed = pendingConfirmations.has(confirmationId);
+export function rejectOperation(
+  confirmationId: string,
+  sessionId?: string,
+): boolean {
+  const pending = pendingConfirmations.get(confirmationId);
+  if (!pending) {
+    return false;
+  }
+
+  // Verify session binding if the confirmation was tied to a session
+  if (pending.sessionId && pending.sessionId !== sessionId) {
+    throw new Error(
+      `Confirmation "${confirmationId}" is bound to a different session`,
+    );
+  }
+
   pendingConfirmations.delete(confirmationId);
-  return existed;
+  return true;
 }
 
 /**
@@ -328,7 +385,7 @@ export function getAuthDescription(
       return "⚠️ Destructive commands (deploy, reset, drop, delete, restart, migrate) require human confirmation.";
     }
     if (toolName === "db_query") {
-      return "⚠️ Destructive queries (DROP, ALTER, TRUNCATE, DELETE) require human confirmation.";
+      return "⚠️ Non-SELECT/WITH/EXPLAIN queries require human confirmation.";
     }
     return "";
   }

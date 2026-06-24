@@ -19,7 +19,7 @@ RUN npx tsc
 # Stage 2: Runner (distroless-ish, no dev deps)
 FROM node:20-alpine AS runner
 
-RUN apk add --no-cache postgresql-client
+RUN apk add --no-cache git ripgrep postgresql-client
 
 WORKDIR /app
 

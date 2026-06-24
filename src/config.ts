@@ -22,6 +22,7 @@ export interface ProjectConfig {
     db?: {
       url: string;
       readOnly?: boolean;
+      readOnlyMode?: "engine" | "wrapper" | "none";
       schemas?: string[];
       maxRows?: number;
     };
@@ -37,6 +38,12 @@ export interface ProjectConfig {
   resources?: Record<string, string>;
 }
 
+export interface HttpConfig {
+  authToken?: string;
+  host?: string;
+  corsOrigins?: string[];
+}
+
 export interface BetterMcpConfig {
   // Backward-compat single project fields
   project?: string;
@@ -46,6 +53,7 @@ export interface BetterMcpConfig {
   stack?: string[];
   transport?: "stdio" | "http";
   port?: number;
+  http?: HttpConfig;
   auth?: AuthConfig;
   tools?: {
     fs?: {
@@ -55,6 +63,7 @@ export interface BetterMcpConfig {
     db?: {
       url: string;
       readOnly?: boolean;
+      readOnlyMode?: "engine" | "wrapper" | "none";
       schemas?: string[];
       maxRows?: number;
     };
@@ -69,6 +78,7 @@ export interface BetterMcpConfig {
     plugins?: PluginsConfig;
   };
   resources?: Record<string, string>;
+  readOnlyMode?: "engine" | "wrapper" | "none";
 
   // Multi-project mode
   projects?: ProjectConfig[];
@@ -359,6 +369,24 @@ export function loadConfig(configPath?: string): BetterMcpConfig {
         parsed.tools.db.url = resolveEnv(parsed.tools.db.url);
       }
 
+      // Resolve env vars in auth.token
+      if (parsed.auth?.token) {
+        parsed.auth.token = resolveEnv(parsed.auth.token);
+      }
+
+      // Resolve env vars in root
+      if (parsed.root) {
+        parsed.root = resolveEnv(parsed.root);
+      }
+
+      // Resolve env vars in http config
+      if (parsed.http?.authToken) {
+        parsed.http.authToken = resolveEnv(parsed.http.authToken);
+      }
+      if (parsed.http?.host) {
+        parsed.http.host = resolveEnv(parsed.http.host);
+      }
+
       validateConfig(parsed);
       return parsed;
     }
@@ -412,7 +440,96 @@ function validateProjectTools(project: ProjectConfig, prefix: string): void {
   }
 }
 
+function validateAuthConfig(auth: AuthConfig, prefix: string): void {
+  if (auth.mode === "token") {
+    if (!auth.token || (typeof auth.token === "string" && auth.token.trim().length === 0)) {
+      throw new Error(`${prefix}: auth.token is required when auth.mode is "token"`);
+    }
+  }
+  if (auth.confirmTimeout !== undefined) {
+    if (typeof auth.confirmTimeout !== "number" || !Number.isFinite(auth.confirmTimeout)) {
+      throw new Error(`${prefix}: auth.confirmTimeout must be a finite number`);
+    }
+    if (auth.confirmTimeout < 1000 || auth.confirmTimeout > 600000) {
+      throw new Error(`${prefix}: auth.confirmTimeout must be between 1000ms (1s) and 600000ms (10min), got ${auth.confirmTimeout}`);
+    }
+  }
+}
+
 function validateConfig(config: BetterMcpConfig): void {
+  if (config.auth) {
+    validateAuthConfig(config.auth, "config");
+  }
+
+  // Validate auth.mode
+  if (config.auth?.mode) {
+    const validModes = ["auto", "confirm", "token", "interactive"];
+    if (!validModes.includes(config.auth.mode)) {
+      throw new Error(
+        `config: auth.mode must be one of: ${validModes.join(", ")}. Got: "${config.auth.mode}"`,
+      );
+    }
+  }
+
+  // Validate transport
+  if (config.transport !== undefined) {
+    const validTransports = ["stdio", "http"];
+    if (!validTransports.includes(config.transport)) {
+      throw new Error(
+        `config: transport must be one of: ${validTransports.join(", ")}. Got: "${config.transport}"`,
+      );
+    }
+  }
+
+  // Validate port
+  if (config.port !== undefined) {
+    if (typeof config.port !== "number" || !Number.isFinite(config.port)) {
+      throw new Error(`config: port must be a finite number, got ${typeof config.port}`);
+    }
+    if (!Number.isInteger(config.port) || config.port < 1024 || config.port > 65535) {
+      throw new Error(
+        `config: port must be an integer between 1024 and 65535, got ${config.port}`,
+      );
+    }
+  }
+
+  // Validate plugins.timeout
+  if (config.tools?.plugins?.timeout !== undefined) {
+    const timeout = config.tools.plugins.timeout;
+    if (typeof timeout !== "number" || !Number.isFinite(timeout)) {
+      throw new Error(`config: plugins.timeout must be a finite number, got ${typeof timeout}`);
+    }
+    if (timeout < 1 || timeout > 300) {
+      throw new Error(
+        `config: plugins.timeout must be between 1 and 300 seconds, got ${timeout}`,
+      );
+    }
+  }
+
+  // Validate http.host
+  if (config.http?.host !== undefined) {
+    const host = config.http.host;
+    if (typeof host !== "string") {
+      throw new Error(`config: http.host must be a string, got ${typeof host}`);
+    }
+    // Allow valid hostname, IP, or ${ENV_VAR} placeholder
+    if (!/^[a-zA-Z0-9._${}-]+$/.test(host)) {
+      throw new Error(
+        `config: http.host contains invalid characters: "${host}". Only alphanumeric, dots, dashes, underscores, and dollar-brace are allowed.`,
+      );
+    }
+  }
+
+  // Validate readOnlyMode
+  if (config.readOnlyMode !== undefined) {
+    const validModes = ["engine", "wrapper", "none"];
+    if (!validModes.includes(config.readOnlyMode)) {
+      throw new Error(
+        `config: readOnlyMode must be one of: ${validModes.join(", ")}. Got: "${config.readOnlyMode}"`,
+      );
+    }
+  }
+
   if (config.projects) {
     if (!Array.isArray(config.projects) || config.projects.length === 0) {
       throw new Error("Config 'projects' must be a non-empty array");
@@ -423,6 +540,7 @@ function validateConfig(config: BetterMcpConfig): void {
       if (!p.root) throw new Error(`projects[${i}]: missing "root"`);
       if (!p.tools) throw new Error(`projects[${i}]: missing "tools"`);
       validateProjectTools(p, `projects[${i}] (${p.name})`);
+      // Auth validation is done on the top-level config.auth, not per-project
     }
   } else {
     // Backward compat: single project mode

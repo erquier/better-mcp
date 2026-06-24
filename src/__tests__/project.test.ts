@@ -1,16 +1,26 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, writeFileSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 import { info, readResource } from "../tools/project.js";
 import type { BetterMcpConfig } from "../config.js";
 
+const tmpDir = mkdtempSync(join(tmpdir(), "better-mcp-project-test-"));
+
+// Write fixture files
+writeFileSync(join(tmpDir, "package.json"), JSON.stringify({ name: "test-project", version: "1.0.0" }));
+writeFileSync(join(tmpDir, "README.md"), "# Test Project\n\nThis is a test.");
+writeFileSync(join(tmpDir, "tsconfig.json"), JSON.stringify({ compilerOptions: { strict: true } }));
+
 const testConfig: BetterMcpConfig = {
-  project: "better-mcp",
-  root: "/tmp/better-mcp",
+  project: "test-project",
+  root: tmpDir,
   name: "Better MCP Test",
   description: "Test instance for development",
   stack: ["typescript", "node"],
   tools: {
     fs: {
-      allowedPaths: ["/tmp/better-mcp"],
+      allowedPaths: [tmpDir],
     },
     shell: {
       commands: {
@@ -27,25 +37,27 @@ const testConfig: BetterMcpConfig = {
   },
 };
 
+const nonexistentDir = mkdtempSync(join(tmpdir(), "better-mcp-nonexistent-"));
+
 const minimalConfig: BetterMcpConfig = {
   project: "minimal",
-  root: "/nonexistent-path",
+  root: nonexistentDir,
   tools: {},
 };
 
 const configNoResources: BetterMcpConfig = {
   project: "no-resources",
-  root: "/tmp",
+  root: tmpDir,
   tools: {},
 };
 
 describe("project.info", () => {
   it("should return project info with basic fields", () => {
     const result = info(testConfig);
-    expect(result.project).toBe("better-mcp");
+    expect(result.project).toBe("test-project");
     expect(result.name).toBe("Better MCP Test");
     expect(result.description).toBe("Test instance for development");
-    expect(result.root).toBe("/tmp/better-mcp");
+    expect(result.root).toBe(tmpDir);
     expect(result.stack).toEqual(["typescript", "node"]);
   });
 
@@ -71,14 +83,13 @@ describe("project.info", () => {
 
   it("should detect config files like package.json", () => {
     const result = info(testConfig);
-    // The project has package.json, tsconfig.json
     expect(result.hasConfig.node).toBe(true);
     expect(result.hasConfig.typescript).toBe(true);
   });
 
   it("should return resources with resolved absolute paths", () => {
     const result = info(testConfig);
-    expect(result.resources.readme).toBe("/tmp/better-mcp/README.md");
+    expect(result.resources.readme).toBe(join(tmpDir, "README.md"));
   });
 
   it("should fallback name to project if name is missing", () => {
@@ -102,7 +113,7 @@ describe("project.info", () => {
   it("should include git in enabledTools when git.enabled is not false", () => {
     const config = {
       ...minimalConfig,
-      root: "/tmp",
+      root: tmpDir,
       tools: {} as BetterMcpConfig["tools"],
     };
     const result = info(config);
@@ -112,7 +123,7 @@ describe("project.info", () => {
   it("should exclude git from enabledTools when git.enabled is false", () => {
     const config = {
       ...minimalConfig,
-      root: "/tmp",
+      root: tmpDir,
       tools: {
         git: { enabled: false },
       },
@@ -124,7 +135,7 @@ describe("project.info", () => {
   it("should return empty availableCommands when no shell config", () => {
     const result = info({
       ...minimalConfig,
-      root: "/tmp",
+      root: tmpDir,
       tools: {},
     });
     expect(result.availableCommands).toEqual([]);
@@ -136,7 +147,7 @@ describe("project.readResource", () => {
     const result = readResource("readme", testConfig);
     expect(result.name).toBe("readme");
     expect(result.content).toBeTruthy();
-    expect(result.path).toBe("/tmp/better-mcp/README.md");
+    expect(result.path).toBe(join(tmpDir, "README.md"));
   });
 
   it("should throw for unknown resource name", () => {
@@ -154,19 +165,13 @@ describe("project.readResource", () => {
   it("should throw when resource file does not exist", () => {
     const config: BetterMcpConfig = {
       project: "test",
-      root: "/tmp",
+      root: tmpDir,
       tools: {},
       resources: {
-        missing: "nonexistent-file-that-does-not-exist.txt",
+        missing: join(tmpDir, "nonexistent-file-that-does-not-exist.txt"),
       },
     };
-    const config2: BetterMcpConfig = {
-      ...config,
-      resources: {
-        missing: "/tmp/nonexistent-file-test-12345.txt",
-      },
-    };
-    expect(() => readResource("missing", config2)).toThrow(
+    expect(() => readResource("missing", config)).toThrow(
       'Resource file not found: "missing"',
     );
   });

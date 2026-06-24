@@ -1,13 +1,17 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, realpathSync, lstatSync, readlinkSync, type Dirent } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, realpathSync, lstatSync, readlinkSync, openSync, readSync, closeSync, type Dirent } from "fs";
 import { resolve, isAbsolute, sep, dirname, basename, extname } from "path";
 import { execFileSync } from "child_process";
+import type { ToolDefinition, ToolContext } from "../tool-registry.js";
+import type { BetterMcpConfig } from "../config.js";
 
 const DEFAULT_MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 const MAX_SEARCH_LIMIT = 500;
 const MAX_LIST_DIRECTORY_LIMIT = 10000;
+const BINARY_DETECTION_BYTES = 1024;
 
 /**
  * Read a file with pagination support.
+ * Detects binary files and returns metadata instead of content for them.
  */
 export function readFile(
   filePath: string,
@@ -15,22 +19,32 @@ export function readFile(
   offset = 1,
   limit = 500,
   maxFileSize?: number
-): { content: string; totalLines: number; fileSize: number } {
+): { content: string; totalLines: number; fileSize: number } | { binary: true; size: number; hint: string } {
   const abs = resolvePath(filePath, allowedPaths);
   const maxSize = maxFileSize ?? DEFAULT_MAX_FILE_SIZE;
 
   // Check file size before reading
   const stats = statSync(abs);
-  if (stats.size > maxSize) {
+  const fileSize = stats.size; // actual bytes on disk
+  if (fileSize > maxSize) {
     throw new Error(
-      `File too large: ${stats.size} bytes exceeds limit of ${maxSize} bytes`
+      `File too large: ${fileSize} bytes exceeds limit of ${maxSize} bytes`
     );
+  }
+
+  // Binary detection: read first 1024 bytes and check for null bytes
+  const fd = openSync(abs, "r");
+  const buffer = Buffer.alloc(BINARY_DETECTION_BYTES);
+  const bytesRead = readSync(fd, buffer, 0, BINARY_DETECTION_BYTES, 0);
+  closeSync(fd);
+
+  if (buffer.slice(0, bytesRead).includes(0)) {
+    return { binary: true, size: fileSize, hint: "application/octet-stream" };
   }
 
   const content = readFileSync(abs, { encoding: "utf-8" });
   const lines = content.split("\n");
   const totalLines = lines.length;
-  const fileSize = Buffer.byteLength(content, "utf-8");
 
   const start = Math.max(0, offset - 1);
   const end = Math.min(start + limit, totalLines);
@@ -58,7 +72,8 @@ export function writeFile(
     throw new Error("Write content exceeds maximum allowed size of 10MB");
   }
 
-  const dir = abs.split(sep).slice(0, -1).join(sep);
+  // Use path.dirname for correct parent directory resolution
+  const dir = dirname(abs);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
@@ -69,6 +84,7 @@ export function writeFile(
 
 /**
  * Search for a regex pattern in files within allowed paths.
+ * Uses ripgrep with --json output for reliable parsing.
  */
 export function searchFiles(
   pattern: string,
@@ -87,7 +103,11 @@ export function searchFiles(
   const safeLimit = Math.min(Math.max(1, limit), MAX_SEARCH_LIMIT);
 
   // Build args array to avoid shell injection
+  // Use --json for reliable parsing, --no-config to avoid alias/color issues
   const args: string[] = [
+    "--json",
+    "--no-config",
+    "--color=never",
     "--no-heading",
     "--line-number",
     "--max-count", String(safeLimit),
@@ -130,21 +150,27 @@ export function searchFiles(
     throw new Error(err.stderr ? `Search failed: ${String(err.stderr).slice(0, 300)}` : "Search failed");
   }
 
+  // Parse JSON lines output from rg --json
   const matches = output
     .split("\n")
     .filter(Boolean)
-    .slice(0, safeLimit)
     .map((line) => {
-      const sepIdx = line.indexOf(":");
-      const sepIdx2 = line.indexOf(":", sepIdx + 1);
-      if (sepIdx === -1 || sepIdx2 === -1) return null;
-      return {
-        file: line.slice(0, sepIdx),
-        line: parseInt(line.slice(sepIdx + 1, sepIdx2), 10),
-        content: line.slice(sepIdx2 + 1),
-      };
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed.type === "match") {
+          return {
+            file: parsed.data.path.text,
+            line: parsed.data.line_number,
+            content: parsed.data.lines.text,
+          };
+        }
+      } catch {
+        // skip unparseable lines
+      }
+      return null;
     })
-    .filter((m): m is NonNullable<typeof m> => m !== null);
+    .filter((m): m is NonNullable<typeof m> => m !== null)
+    .slice(0, safeLimit);
 
   return { matches };
 }
@@ -360,4 +386,118 @@ export function nodeSearch(
     }
   }
   return matches.slice(0, limit);
+}
+
+// ─── Tool Definitions ──────────────────────────────────────────────────────
+
+/**
+ * Get filesystem tool definitions for the MCP server.
+ * Tools are only returned if at least one project has fs tools enabled.
+ */
+export function getToolDefinitions(config: BetterMcpConfig, hasFs: boolean): ToolDefinition[] {
+  if (!hasFs) return [];
+
+  return [
+    {
+      name: "fs_read",
+      description: "Read a file with pagination. Returns content, total lines, and file size.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "File path (absolute or relative to project root)" },
+          offset: { type: "number", description: "Starting line (1-indexed)", default: 1 },
+          limit: { type: "number", description: "Max lines to return (max 2000)", default: 500 },
+        },
+        required: ["path"],
+      },
+      requiresAuth: () => false,
+      handler: async (args, ctx) => {
+        const path = args.path;
+        if (typeof path !== "string" || path.length === 0) {
+          throw new Error("fs_read requires a non-empty string 'path'");
+        }
+        const offset = typeof args.offset === "number" && Number.isFinite(args.offset)
+          ? Math.max(1, Math.floor(args.offset)) : 1;
+        const limit = typeof args.limit === "number" && Number.isFinite(args.limit)
+          ? Math.min(Math.max(1, Math.floor(args.limit)), 2000) : 500;
+        const allowed = ctx.project.tools.fs?.allowedPaths || [ctx.project.root];
+        const maxFileSize = ctx.project.tools.fs?.maxFileSize;
+        const result = readFile(path, allowed, offset, limit, maxFileSize);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      },
+    },
+    {
+      name: "fs_write",
+      description: `Write content to a file. Creates directories if needed. Handles escaping correctly.`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "File path" },
+          content: { type: "string", description: "File content" },
+        },
+        required: ["path", "content"],
+      },
+      requiresAuth: () => true,
+      handler: async (args, ctx) => {
+        const path = args.path;
+        if (typeof path !== "string" || path.length === 0) {
+          throw new Error("fs_write requires a non-empty string 'path'");
+        }
+        const content = args.content;
+        if (typeof content !== "string") {
+          throw new Error("fs_write requires a string 'content'");
+        }
+        const allowed = ctx.project.tools.fs?.allowedPaths || [ctx.project.root];
+        const result = writeFile(path, content, allowed);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      },
+    },
+    {
+      name: "fs_search",
+      description: "Search files by regex pattern within the project.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pattern: { type: "string", description: "Regex pattern to search" },
+          fileGlob: { type: "string", description: "Optional file glob filter (e.g. *.ts, *.py)" },
+          limit: { type: "number", description: "Max results", default: 50 },
+        },
+        required: ["pattern"],
+      },
+      requiresAuth: () => false,
+      handler: async (args, ctx) => {
+        const pattern = args.pattern;
+        if (typeof pattern !== "string" || pattern.length === 0) {
+          throw new Error("fs_search requires a non-empty string 'pattern'");
+        }
+        const fileGlob = typeof args.fileGlob === "string" ? args.fileGlob : undefined;
+        const limit = typeof args.limit === "number" && Number.isFinite(args.limit)
+          ? Math.max(1, Math.floor(args.limit)) : 50;
+        const allowed = ctx.project.tools.fs?.allowedPaths || [ctx.project.root];
+        const result = searchFiles(pattern, allowed, fileGlob, limit);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      },
+    },
+    {
+      name: "fs_list",
+      description: "List directory contents.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Directory path" },
+        },
+        required: ["path"],
+      },
+      requiresAuth: () => false,
+      handler: async (args, ctx) => {
+        const path = args.path;
+        if (typeof path !== "string" || path.length === 0) {
+          throw new Error("fs_list requires a non-empty string 'path'");
+        }
+        const allowed = ctx.project.tools.fs?.allowedPaths || [ctx.project.root];
+        const result = listDirectory(path, allowed);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      },
+    },
+  ];
 }

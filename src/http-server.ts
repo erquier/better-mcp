@@ -1,8 +1,9 @@
 import http from "node:http";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { URL } from "node:url";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage, MessageExtraInfo } from "@modelcontextprotocol/sdk/types.js";
+import type { HttpConfig } from "./config.js";
 
 // ─── SSE Transport (implements MCP Transport for HTTP/SSE) ──────────────
 
@@ -139,7 +140,130 @@ export class HttpServerTransport implements Transport {
 
 export interface HttpServerOptions {
   port?: number;
+  host?: string;
   transport: HttpServerTransport;
+  httpConfig?: HttpConfig;
+}
+
+/**
+ * Compare two strings using timing-safe comparison.
+ * Handles different-length inputs safely.
+ */
+function safeCompare(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a, "utf-8");
+  const bBuf = Buffer.from(b, "utf-8");
+  if (aBuf.length !== bBuf.length) {
+    // Use timingSafeEqual on the first buffer length anyway to avoid leaking info
+    // but with differing lengths we know it'll be false
+    const fake = Buffer.alloc(aBuf.length, 0);
+    timingSafeEqual(aBuf, fake);
+    return false;
+  }
+  return timingSafeEqual(aBuf, bBuf);
+}
+
+/**
+ * Set CORS headers on a response based on the origin and configured allowlist.
+ * Returns true if the request should proceed, false if it should be rejected.
+ */
+function handleCors(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  corsOrigins?: string[],
+): boolean {
+  const origin = req.headers.origin;
+  const host = req.headers.host;
+
+  // Determine allowed origin
+  let allowedOrigin = "";
+
+  if (corsOrigins && corsOrigins.length > 0) {
+    // Allowlist mode: only allow configured origins
+    if (origin && corsOrigins.includes(origin)) {
+      allowedOrigin = origin;
+    }
+  } else if (origin && host) {
+    // Same-origin check: origin matches Host header
+    try {
+      const originUrl = new URL(origin);
+      const originHost = originUrl.host;
+      // For same-origin, check host (including port)
+      if (originHost === host || originHost === `127.0.0.1:${host.split(":")[1]}` || originHost === `localhost:${host.split(":")[1]}`) {
+        allowedOrigin = origin;
+      } else {
+        // Check for localhost/127.0.0.1 variations
+        const hostPort = host.split(":");
+        const hostName = hostPort[0];
+        const hostPortNum = hostPort[1];
+        if ((hostName === "127.0.0.1" || hostName === "localhost" || hostName === "0.0.0.0") &&
+            (originHost === `127.0.0.1:${hostPortNum}` || originHost === `localhost:${hostPortNum}`)) {
+          allowedOrigin = origin;
+        }
+      }
+    } catch {
+      // Invalid origin URL — don't allow
+    }
+  }
+
+  if (origin && !allowedOrigin) {
+    // Origin does not match — return 403 for non-OPTIONS requests
+    if (req.method !== "OPTIONS") {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Origin not allowed" }));
+      return false;
+    }
+    // For OPTIONS, still return 403 if origin isn't allowed
+    res.writeHead(403, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Origin not allowed" }));
+    return false;
+  }
+
+  // Set CORS headers
+  if (allowedOrigin) {
+    res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+  } else {
+    res.setHeader("Access-Control-Allow-Origin", origin || "*");
+  }
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, MCP-Protocol-Version");
+  res.setHeader("Access-Control-Max-Age", "86400");
+
+  return true;
+}
+
+/**
+ * Validate the Authorization header against the configured token.
+ * Returns true if authorized, false if not.
+ */
+function checkAuthHeader(
+  req: http.IncomingMessage,
+  authToken: string | undefined,
+): boolean {
+  // No token configured — still require one (generate a random one at startup)
+  if (!authToken) {
+    // This should never happen because we ensure a token exists before calling
+    return false;
+  }
+
+  // GET /health is public
+  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  if (req.method === "GET" && url.pathname === "/health") {
+    return true;
+  }
+
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return false;
+  }
+
+  // Parse "Bearer <token>"
+  const parts = authHeader.split(" ");
+  if (parts.length !== 2 || parts[0] !== "Bearer") {
+    return false;
+  }
+
+  const providedToken = parts[1];
+  return safeCompare(providedToken, authToken);
 }
 
 /**
@@ -147,20 +271,36 @@ export interface HttpServerOptions {
  * Returns the server instance and the transport (for connecting to the MCP Server).
  */
 export function createHttpServer(options: HttpServerOptions): http.Server {
-  const { transport } = options;
+  const { transport, httpConfig } = options;
   const port = options.port ?? 3100;
+  const host = options.host ?? httpConfig?.host ?? "127.0.0.1";
+  const corsOrigins = httpConfig?.corsOrigins;
+
+  // Resolve auth token
+  let authToken = httpConfig?.authToken;
+  if (!authToken) {
+    // Generate a random token and print to stderr
+    authToken = randomUUID();
+    console.error(`⚠️ HTTP auth token: ${authToken}`);
+  }
 
   const server = http.createServer((req, res) => {
-    // CORS headers
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, MCP-Protocol-Version");
-    res.setHeader("Access-Control-Max-Age", "86400");
+    // ── CORS check first ──
+    if (!handleCors(req, res, corsOrigins)) {
+      return; // response already sent
+    }
 
-    // Handle OPTIONS (preflight)
+    // Handle OPTIONS (preflight) — after CORS check
     if (req.method === "OPTIONS") {
       res.writeHead(204);
       res.end();
+      return;
+    }
+
+    // ── Authentication check (BEFORE any routing, except health) ──
+    if (!checkAuthHeader(req, authToken)) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Unauthorized" }));
       return;
     }
 
@@ -201,17 +341,22 @@ export function createHttpServer(options: HttpServerOptions): http.Server {
 
   // Log when server starts
   server.on("listening", () => {
-    console.error(`[HTTP] better-mcp HTTP server listening on http://localhost:${port}`);
-    console.error(`[HTTP] SSE endpoint: http://localhost:${port}/mcp (GET)`);
-    console.error(`[HTTP] MCP endpoint: http://localhost:${port}/mcp (POST)`);
-    console.error(`[HTTP] Health endpoint: http://localhost:${port}/health (GET)`);
+    const addr = server.address();
+    const bindAddr = typeof addr === "object" && addr ? `${addr.address}:${addr.port}` : `${host}:${port}`;
+    console.error(`[HTTP] better-mcp HTTP server listening on http://${bindAddr}`);
+    console.error(`[HTTP] SSE endpoint: http://${bindAddr}/mcp (GET)`);
+    console.error(`[HTTP] MCP endpoint: http://${bindAddr}/mcp (POST)`);
+    console.error(`[HTTP] Health endpoint: http://${bindAddr}/health (GET)`);
+    if (authToken) {
+      console.error(`[HTTP] Auth: Bearer token required`);
+    }
   });
 
   server.on("error", (err) => {
     console.error(`[HTTP] Server error:`, err);
   });
 
-  server.listen(port);
+  server.listen(port, host);
 
   return server;
 }

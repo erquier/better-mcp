@@ -242,9 +242,183 @@
           "schema": "prisma/schema.prisma"
         }
       ]
+    },
+    "auth": {
+      "type": "object",
+      "description": "Authentication and authorization configuration for destructive operations.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "description": "Auth mode: 'auto' (no confirmation needed), 'confirm' (manual confirmation), 'token' (token-based), 'interactive' (SSE prompt).",
+          "enum": ["auto", "confirm", "token", "interactive"],
+          "default": "auto",
+          "examples": ["confirm", "token", "interactive"]
+        },
+        "token": {
+          "type": "string",
+          "description": "Secret token for token-based auth mode. Supports ${ENV_VAR} syntax.",
+          "examples": ["${MY_MCP_TOKEN}", "my-secret-token"]
+        },
+        "confirmTimeout": {
+          "type": "number",
+          "description": "How long (in ms) a pending confirmation stays valid. Default: 300000 (5 min). Range: 1000-600000.",
+          "minimum": 1000,
+          "maximum": 600000,
+          "default": 300000,
+          "examples": [60000, 300000, 600000]
+        }
+      },
+      "additionalProperties": false,
+      "examples": [
+        { "mode": "confirm" },
+        { "mode": "token", "token": "${MY_MCP_TOKEN}" },
+        { "mode": "interactive", "confirmTimeout": 60000 }
+      ]
+    },
+    "plugins": {
+      "type": "object",
+      "description": "Plugin configuration for extending the MCP server with custom tools.",
+      "properties": {
+        "dir": {
+          "type": "string",
+          "description": "Directory containing plugin files. Relative paths resolve from project root. Default: '<root>/plugins'.",
+          "examples": ["plugins", "/home/user/.mcp-plugins"]
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable plugin loading. Default: true.",
+          "default": true,
+          "examples": [true, false]
+        },
+        "allowlist": {
+          "type": "array",
+          "description": "List of plugin names (without extension) that are allowed to load. If empty, all plugins are allowed.",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "examples": [["my-plugin"], ["plugin-a", "plugin-b"]]
+        },
+        "timeout": {
+          "type": "number",
+          "description": "Maximum time in seconds to wait for a plugin to import. Default: 10. Range: 1-300.",
+          "minimum": 1,
+          "maximum": 300,
+          "default": 10,
+          "examples": [10, 30, 60]
+        }
+      },
+      "additionalProperties": false,
+      "examples": [
+        { "dir": "plugins", "enabled": true, "allowlist": ["my-plugin"], "timeout": 10 }
+      ]
+    },
+    "projects": {
+      "type": "array",
+      "description": "Multi-project mode: array of project configurations. When present, the single-project fields (project, root, tools) are ignored.",
+      "items": {
+        "type": "object",
+        "description": "A single project configuration.",
+        "required": ["name", "root", "tools"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Unique project identifier.",
+            "minLength": 1
+          },
+          "root": {
+            "type": "string",
+            "description": "Absolute path to the project root."
+          },
+          "description": {
+            "type": "string",
+            "description": "Brief description of the project."
+          },
+          "stack": {
+            "type": "array",
+            "description": "Technology stack tags.",
+            "items": { "type": "string" },
+            "uniqueItems": true
+          },
+          "tools": {
+            "type": "object",
+            "description": "Tool configuration for this project.",
+            "properties": {
+              "fs": { "$ref": "#/properties/tools/properties/fs" },
+              "db": { "$ref": "#/properties/tools/properties/db" },
+              "shell": { "$ref": "#/properties/tools/properties/shell" },
+              "git": { "$ref": "#/properties/tools/properties/git" }
+            },
+            "additionalProperties": false
+          },
+          "resources": {
+            "type": "object",
+            "description": "Map of resource names to file paths.",
+            "patternProperties": {
+              "^[a-zA-Z0-9_-]+$": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "uniqueItems": true,
+      "examples": [[
+        { "name": "app1", "root": "/home/user/app1", "tools": { "fs": { "allowedPaths": ["/home/user/app1"] } } },
+        { "name": "app2", "root": "/home/user/app2", "tools": { "fs": { "allowedPaths": ["/home/user/app2"] }, "db": { "url": "${DATABASE_URL}" } } }
+      ]]
+    },
+    "transport": {
+      "type": "string",
+      "description": "Transport protocol for the MCP server. 'stdio' uses standard input/output. 'http' uses HTTP/SSE.",
+      "enum": ["stdio", "http"],
+      "default": "stdio",
+      "examples": ["stdio", "http"]
+    },
+    "port": {
+      "type": "number",
+      "description": "Port number for HTTP transport. Only used when transport is 'http'. Default: 3100.",
+      "minimum": 1024,
+      "maximum": 65535,
+      "default": 3100,
+      "examples": [3100, 8080, 3000]
+    },
+    "http": {
+      "type": "object",
+      "description": "HTTP server configuration for HTTP transport.",
+      "properties": {
+        "host": {
+          "type": "string",
+          "description": "Host address to bind the HTTP server. Default: '127.0.0.1'. Supports ${ENV_VAR} syntax.",
+          "default": "127.0.0.1",
+          "examples": ["127.0.0.1", "0.0.0.0", "${HOST}"]
+        },
+        "authToken": {
+          "type": "string",
+          "description": "Bearer token for HTTP API authentication. If not set, a random token is generated at startup and logged to stderr. Supports ${ENV_VAR} syntax.",
+          "examples": ["${HTTP_AUTH_TOKEN}", "my-http-token"]
+        },
+        "corsOrigins": {
+          "type": "array",
+          "description": "Allowed CORS origins. If empty, same-origin requests from localhost/127.0.0.1 are allowed.",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "examples": [["http://localhost:3000"], ["https://my-app.com"]]
+        }
+      },
+      "additionalProperties": false,
+      "examples": [
+        { "host": "0.0.0.0", "authToken": "${HTTP_AUTH_TOKEN}", "corsOrigins": ["http://localhost:3000"] }
+      ]
+    },
+    "readOnlyMode": {
+      "type": "string",
+      "description": "Global read-only mode override for database operations. 'engine': SET TRANSACTION READ ONLY. 'wrapper': read-only check in the tool handler. 'none': no read-only enforcement.",
+      "enum": ["engine", "wrapper", "none"],
+      "default": "engine",
+      "examples": ["engine", "wrapper", "none"]
     }
   },
-  "additionalProperties": false,
+  "additionalProperties": true,
   "examples": [
     {
       "$schema": "https://raw.githubusercontent.com/erquier/better-mcp/main/better-mcp.schema.json",

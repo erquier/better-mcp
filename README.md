@@ -660,7 +660,7 @@ Para ambientes restrictivos: deshabilitar `shell.allowRaw`, limitar `db.schemas`
 - [x] `shell_raw` (restringible)
 - [x] Mejoras de seguridad (path validation symlink, null bytes, rate limiting input validation)
 - [x] Docker image (multi-stage build)
-- [x] Testing suite completa (Vitest, 70+ tests)
+- [x] Testing suite completa (Vitest, 129+ tests)
 - [x] npm publish (`@erquier/better-mcp`)
 - [x] JSON Schema para IDE autocomplete
 - [x] CONTRIBUTING.md

@@ -1,61 +1,44 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { status, log, diff } from "../tools/git.js";
 import { execFileSync } from "child_process";
-import { writeFileSync, unlinkSync } from "fs";
-import { resolve } from "path";
+import { mkdtempSync, writeFileSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 
-const WORKDIR = "/tmp/better-mcp";
+const WORKDIR = mkdtempSync(join(tmpdir(), "better-mcp-git-test-"));
 
-/**
- * Helper to check if we're in a git repo.
- */
-function isGitRepo(): boolean {
-  try {
-    execFileSync("git", ["rev-parse", "--git-dir"], {
-      cwd: WORKDIR,
-      encoding: "utf-8",
-      stdio: "ignore",
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Helper to get initial commit hash for diff tests.
- */
-function getFirstCommitHash(): string {
-  const result = execFileSync(
-    "git",
-    ["rev-list", "--max-parents=0", "HEAD"],
-    { cwd: WORKDIR, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
-  );
-  return result.trim();
-}
+beforeAll(() => {
+  // Initialize a git repo in the temp directory
+  execFileSync("git", ["init"], { cwd: WORKDIR, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "test@test.com"], {
+    cwd: WORKDIR, encoding: "utf-8", stdio: "pipe",
+  });
+  execFileSync("git", ["config", "user.name", "Test User"], {
+    cwd: WORKDIR, encoding: "utf-8", stdio: "pipe",
+  });
+  // Create an initial file and commit
+  writeFileSync(join(WORKDIR, "README.md"), "# Test Repo\n");
+  execFileSync("git", ["add", "README.md"], {
+    cwd: WORKDIR, encoding: "utf-8", stdio: "pipe",
+  });
+  execFileSync("git", ["commit", "-m", "initial commit"], {
+    cwd: WORKDIR, encoding: "utf-8", stdio: "pipe",
+  });
+});
 
 describe("git.status", () => {
-  beforeEach(() => {
-    if (!isGitRepo()) {
-      console.warn("Not a git repo, skipping git tests...");
-    }
-  });
-
   it("should return git status with branch name", () => {
-    if (!isGitRepo()) return;
     const result = status(WORKDIR);
     expect(result.branch).toBeTruthy();
     expect(typeof result.branch).toBe("string");
   });
 
   it("should return isClean boolean", () => {
-    if (!isGitRepo()) return;
     const result = status(WORKDIR);
     expect(typeof result.isClean).toBe("boolean");
   });
 
   it("should return staged, unstaged, untracked arrays", () => {
-    if (!isGitRepo()) return;
     const result = status(WORKDIR);
     expect(Array.isArray(result.staged)).toBe(true);
     expect(Array.isArray(result.unstaged)).toBe(true);
@@ -63,14 +46,12 @@ describe("git.status", () => {
   });
 
   it("should return ahead and behind as numbers", () => {
-    if (!isGitRepo()) return;
     const result = status(WORKDIR);
     expect(typeof result.ahead).toBe("number");
     expect(typeof result.behind).toBe("number");
   });
 
   it("should return lastCommit info when commits exist", () => {
-    if (!isGitRepo()) return;
     const result = status(WORKDIR);
     expect(result.lastCommit).not.toBeNull();
     if (result.lastCommit) {
@@ -87,21 +68,13 @@ describe("git.status", () => {
 });
 
 describe("git.log", () => {
-  beforeEach(() => {
-    if (!isGitRepo()) {
-      console.warn("Not a git repo, skipping git log tests...");
-    }
-  });
-
   it("should return log entries", () => {
-    if (!isGitRepo()) return;
     const entries = log(WORKDIR);
     expect(Array.isArray(entries)).toBe(true);
     expect(entries.length).toBeGreaterThan(0);
   });
 
   it("should return entries with hash, message, author, date", () => {
-    if (!isGitRepo()) return;
     const entries = log(WORKDIR, 1);
     expect(entries.length).toBeGreaterThanOrEqual(1);
     const entry = entries[0];
@@ -114,13 +87,11 @@ describe("git.log", () => {
   });
 
   it("should respect the limit parameter", () => {
-    if (!isGitRepo()) return;
     const entries = log(WORKDIR, 1);
     expect(entries.length).toBeLessThanOrEqual(1);
   });
 
   it("should clamp limit to valid range", () => {
-    if (!isGitRepo()) return;
     const entries = log(WORKDIR, 0); // should clamp to 1
     expect(entries.length).toBeGreaterThanOrEqual(1);
   });
@@ -131,14 +102,7 @@ describe("git.log", () => {
 });
 
 describe("git.diff", () => {
-  beforeEach(() => {
-    if (!isGitRepo()) {
-      console.warn("Not a git repo, skipping git diff tests...");
-    }
-  });
-
   it("should return diff with files and patch", () => {
-    if (!isGitRepo()) return;
     const result = diff(WORKDIR);
     expect(result).toHaveProperty("files");
     expect(result).toHaveProperty("patch");
@@ -147,9 +111,7 @@ describe("git.diff", () => {
   });
 
   it("should accept a custom diff target", () => {
-    if (!isGitRepo()) return;
-    const firstHash = getFirstCommitHash();
-    const result = diff(WORKDIR, firstHash);
+    const result = diff(WORKDIR, "HEAD");
     expect(result).toHaveProperty("files");
     expect(Array.isArray(result.files)).toBe(true);
   });
