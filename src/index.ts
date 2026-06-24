@@ -1,15 +1,24 @@
 #!/usr/bin/env node
 
 import { startServer } from "./server.js";
+import { runInit } from "./init.js";
 
 // Usage:
-//   better-mcp                    → loads better-mcp.json from cwd (stdio)
-//   better-mcp --http             → loads better-mcp.json from cwd (HTTP/SSE on port 3100)
-//   better-mcp --http --port 8080 → loads better-mcp.json from cwd (HTTP/SSE on port 8080)
+//   better-mcp                    → uses better-mcp.json (or auto-detected config) from cwd (stdio)
+//   better-mcp init [--force]     → write a better-mcp.json auto-detected from cwd, then exit
+//   better-mcp --http             → HTTP/SSE on port 3100
+//   better-mcp --http --port 8080 → HTTP/SSE on port 8080
 //   better-mcp --config path/to/config.json → loads custom config
 //   better-mcp path/to/config.json → loads custom config (stdio)
 
 const args = process.argv.slice(2);
+
+// `better-mcp init` — scaffold a config and exit (no server).
+if (args[0] === "init") {
+  runInit(process.cwd(), { force: args.includes("--force") });
+  process.exit(0);
+}
+
 let configPath: string | undefined;
 let transport: "stdio" | "http" | undefined;
 let port: number | undefined;

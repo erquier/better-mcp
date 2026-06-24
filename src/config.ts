@@ -1,5 +1,5 @@
-import { readFileSync, existsSync } from "fs";
-import { resolve, isAbsolute } from "path";
+import { readFileSync, existsSync, readdirSync } from "fs";
+import { resolve, isAbsolute, basename } from "path";
 import type { AuthConfig } from "./auth.js";
 
 export interface PluginsConfig {
@@ -201,6 +201,139 @@ export function resolveEnv(value: string): string {
   });
 }
 
+// ─── Zero-config auto-detection ─────────────────────────────────────────
+// "Drop into any project": if there's no better-mcp.json, build a sensible
+// config by scanning the working directory — root = cwd, the repo as the fs
+// sandbox, package.json scripts as shell commands, DATABASE_URL (if postgres)
+// as the DB, and common docs as resources. No setup, no Docker image required.
+
+const STACK_MARKERS: Array<[string, string]> = [
+  ["package.json", "node"],
+  ["tsconfig.json", "typescript"],
+  ["pyproject.toml", "python"],
+  ["requirements.txt", "python"],
+  ["Cargo.toml", "rust"],
+  ["go.mod", "go"],
+  ["prisma/schema.prisma", "prisma"],
+  ["docker-compose.yml", "docker"],
+  ["docker-compose.yaml", "docker"],
+  ["next.config.js", "nextjs"],
+  ["next.config.ts", "nextjs"],
+  ["vite.config.ts", "vite"],
+  ["vite.config.js", "vite"],
+];
+
+function detectPackageManager(root: string): string {
+  if (existsSync(resolve(root, "pnpm-lock.yaml"))) return "pnpm";
+  if (existsSync(resolve(root, "yarn.lock"))) return "yarn";
+  if (existsSync(resolve(root, "bun.lockb"))) return "bun";
+  return "npm";
+}
+
+function readJsonSafe(path: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function detectDbUrl(root: string): string | undefined {
+  // Prefer the live env, then parse a .env file. Only return postgres URLs since
+  // the db tool drives psql; other engines are skipped (db tool stays disabled).
+  const fromEnv = process.env.DATABASE_URL;
+  const isPg = (u: string) => /^(postgres|postgresql|psql):\/\//.test(u.trim());
+  if (fromEnv && isPg(fromEnv)) return fromEnv;
+  const envFile = resolve(root, ".env");
+  if (existsSync(envFile)) {
+    try {
+      for (const line of readFileSync(envFile, "utf-8").split("\n")) {
+        const m = line.match(/^\s*DATABASE_URL\s*=\s*(.+)\s*$/);
+        if (m) {
+          const val = m[1].trim().replace(/^["']|["']$/g, "");
+          if (isPg(val)) return val;
+        }
+      }
+    } catch {
+      /* ignore unreadable .env */
+    }
+  }
+  return undefined;
+}
+
+function detectCommands(root: string): Record<string, string> {
+  const commands: Record<string, string> = {};
+  const pm = detectPackageManager(root);
+  const pkg = readJsonSafe(resolve(root, "package.json"));
+  const scripts = (pkg?.scripts as Record<string, string> | undefined) ?? {};
+  // Expose the common, safe-to-run scripts the project already defines.
+  const interesting = ["build", "test", "lint", "typecheck", "type-check", "tsc", "dev", "start", "test:e2e"];
+  for (const name of interesting) {
+    if (scripts[name]) commands[name] = `${pm} run ${name}`;
+  }
+  // Useful operational snapshots when the markers are present.
+  if (existsSync(resolve(root, "prisma/schema.prisma"))) {
+    commands["migrate-status"] = "npx prisma migrate status";
+  }
+  if (existsSync(resolve(root, "docker-compose.yml")) || existsSync(resolve(root, "docker-compose.yaml"))) {
+    commands["ps"] = "docker compose ps";
+    commands["logs"] = "docker compose logs --no-color --tail=200";
+  }
+  return commands;
+}
+
+function detectResources(root: string): Record<string, string> {
+  const resources: Record<string, string> = {};
+  const add = (name: string, rel: string) => {
+    if (existsSync(resolve(root, rel))) resources[name] = rel;
+  };
+  add("readme", "README.md");
+  add("changelog", "CHANGELOG.md");
+  add("schema", "prisma/schema.prisma");
+  // Pick up a handoff/onboarding doc if present (common agent entry point).
+  try {
+    for (const f of readdirSync(root)) {
+      if (/handoff|onboarding/i.test(f) && /\.md$/i.test(f)) {
+        resources["handoff"] = f;
+        break;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return resources;
+}
+
+/** Build a sensible config from a project directory, with no better-mcp.json. */
+export function buildAutoConfig(root: string = process.cwd()): BetterMcpConfig {
+  const abs = resolve(root);
+  const pkg = readJsonSafe(resolve(abs, "package.json"));
+  const name = (typeof pkg?.name === "string" && pkg.name) || basename(abs) || "project";
+  const stack = STACK_MARKERS.filter(([file]) => existsSync(resolve(abs, file))).map(([, key]) => key);
+  const uniqueStack = Array.from(new Set(stack));
+
+  const tools: NonNullable<BetterMcpConfig["tools"]> = {
+    fs: { allowedPaths: [abs] },
+    git: { enabled: existsSync(resolve(abs, ".git")) },
+  };
+  const commands = detectCommands(abs);
+  if (Object.keys(commands).length > 0) tools.shell = { commands };
+  const dbUrl = detectDbUrl(abs);
+  if (dbUrl) tools.db = { url: dbUrl, readOnly: true };
+
+  const resources = detectResources(abs);
+
+  return {
+    project: name,
+    name,
+    root: abs,
+    description: typeof pkg?.description === "string" ? pkg.description : undefined,
+    stack: uniqueStack,
+    tools,
+    ...(Object.keys(resources).length > 0 ? { resources } : {}),
+  };
+}
+
 export function loadConfig(configPath?: string): BetterMcpConfig {
   const paths = configPath
     ? [configPath]
@@ -231,7 +364,19 @@ export function loadConfig(configPath?: string): BetterMcpConfig {
     }
   }
 
-  throw new Error("Config file (better-mcp.json) not found");
+  // An explicit --config path that doesn't exist is an error (the user meant it).
+  if (configPath) {
+    throw new Error(`Config file not found: ${configPath}`);
+  }
+
+  // Zero-config: no better-mcp.json → auto-detect from the working directory.
+  const auto = buildAutoConfig(process.cwd());
+  validateConfig(auto);
+  console.error(
+    `better-mcp: no better-mcp.json found — using auto-detected config for "${auto.name}" ` +
+      `(root: ${auto.root}). Run \`better-mcp init\` to customize.`,
+  );
+  return auto;
 }
 
 function validateProjectTools(project: ProjectConfig, prefix: string): void {
