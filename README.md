@@ -583,17 +583,17 @@ Para ambientes restrictivos: deshabilitar `shell.allowRaw`, limitar `db.schemas`
 - [x] JSON Schema para IDE autocomplete
 - [x] CONTRIBUTING.md
 
-### v0.3
-- [ ] HTTP transport (SSE)
-- [ ] Soporte multi-proyecto (monorepo)
-- [ ] Integración CI/CD (GitHub Actions)
-- [ ] Documentación multi-idioma
+### v0.3 — ✅ Completado
+- [x] HTTP transport (SSE) — Servidor HTTP con Node.js built-in, zero deps externas
+- [x] Soporte multi-proyecto (monorepo) — `projects[]` en config + workspace tools
+- [x] Integración CI/CD (GitHub Actions) — Matrix Node 18/20/22 + publish automático
+- [x] Tests de plugins (18 tests nuevos)
 
-### v1.0
-- [ ] **Auth gates** (confirmación humana en writes/deploy)
-- [ ] **Workspace mode** (múltiples proyectos simultáneos)
-- [ ] Python SDK (`pip install better-mcp`)
-- [ ] Plugins personalizados
+### v1.0 — ✅ Completado
+- [x] **Auth gates** — 4 modos (auto, confirm, token, interactive) con soft-block
+- [x] **Workspace mode** — `workspace_list_projects` + `workspace_set_project`
+- [x] Python SDK — `pip install better-mcp`, cliente async con Pydantic models
+- [x] Plugins personalizados — plugin discovery, allowlist, ejemplo echo/greet
 
 ---
 

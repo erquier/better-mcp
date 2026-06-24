@@ -12,7 +12,7 @@ export function runCommand(
   config: BetterMcpConfig,
   workdir?: string
 ): { stdout: string; stderr: string; exitCode: number; duration: number } {
-  const shellConfig = config.tools.shell;
+  const shellConfig = config.tools!.shell;
   if (!shellConfig?.commands) {
     throw new Error("No shell commands configured");
   }
@@ -38,7 +38,7 @@ export function runCommand(
     throw new Error("Command configuration is invalid");
   }
 
-  const cwd = workdir || config.root;
+  const cwd = workdir || config.root!;
   return runShellCommand(command, cwd, 300);
 }
 
@@ -50,7 +50,7 @@ export function runRaw(
   config: BetterMcpConfig,
   timeout = 120
 ): { stdout: string; stderr: string; exitCode: number; duration: number } {
-  const shellConfig = config.tools.shell;
+  const shellConfig = config.tools!.shell;
   if (!shellConfig?.allowRaw) {
     throw new Error(
       "Raw shell commands not allowed. Set shell.allowRaw: true in better-mcp.json to enable"
@@ -74,7 +74,7 @@ export function runRaw(
     throw new Error("Command contains prohibited shell metacharacters");
   }
 
-  return runShellCommand(command, config.root, Math.max(1, Math.min(timeout, 3600)));
+  return runShellCommand(command, config.root!, Math.max(1, Math.min(timeout, 3600)));
 }
 
 /**

@@ -3,24 +3,36 @@
 import { startServer } from "./server.js";
 
 // Usage:
-//   better-mcp                    → loads better-mcp.json from cwd
-//   better-mcp path/to/config.json → loads custom config
-//   better-mcp run                → loads better-mcp.json from cwd
-//   better-mcp run path/to/config.json → loads custom config
+//   better-mcp                    → loads better-mcp.json from cwd (stdio)
+//   better-mcp --http             → loads better-mcp.json from cwd (HTTP/SSE on port 3100)
+//   better-mcp --http --port 8080 → loads better-mcp.json from cwd (HTTP/SSE on port 8080)
 //   better-mcp --config path/to/config.json → loads custom config
+//   better-mcp path/to/config.json → loads custom config (stdio)
 
 const args = process.argv.slice(2);
 let configPath: string | undefined;
+let transport: "stdio" | "http" | undefined;
+let port: number | undefined;
 
-if (args[0] === "run") {
-  configPath = args[1];
-} else if (args[0] === "--config") {
-  configPath = args[1];
-} else if (args[0] && !args[0].startsWith("-")) {
-  configPath = args[0];
+for (let i = 0; i < args.length; i++) {
+  const arg = args[i];
+
+  if (arg === "--http") {
+    transport = "http";
+  } else if (arg === "--port" && i + 1 < args.length) {
+    port = parseInt(args[++i], 10);
+  } else if (arg === "--config" && i + 1 < args.length) {
+    configPath = args[++i];
+  } else if (arg === "run" && i + 1 < args.length) {
+    configPath = args[++i];
+  } else if (arg === "run") {
+    // just "run" with no path arg — will use default path
+  } else if (!arg.startsWith("-") && !configPath) {
+    configPath = arg;
+  }
 }
 
-startServer(configPath).catch((err) => {
+startServer(configPath, { transport, port }).catch((err) => {
   console.error("better-mcp fatal error:", err);
   process.exit(1);
 });

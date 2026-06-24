@@ -1,0 +1,7 @@
+{
+  "project": "better-mcp-test",
+  "root": "/tmp",
+  "transport": "http",
+  "port": 3199,
+  "tools": {}
+}

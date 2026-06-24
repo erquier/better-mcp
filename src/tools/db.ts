@@ -11,7 +11,7 @@ export function query(
   config: BetterMcpConfig,
   maxRows = 500
 ): { columns: string[]; rows: Record<string, unknown>[]; rowCount: number; truncated: boolean } {
-  const dbConfig = config.tools.db;
+  const dbConfig = config.tools!.db;
   if (!dbConfig?.url) {
     throw new Error("Database not configured");
   }
@@ -72,7 +72,7 @@ export function schema(
   config: BetterMcpConfig,
   schemas?: string[]
 ): { tables: SchemaTable[] } {
-  const dbConfig = config.tools.db;
+  const dbConfig = config.tools!.db;
   if (!dbConfig?.url) {
     throw new Error("Database not configured");
   }

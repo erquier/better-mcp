@@ -6,7 +6,8 @@ import type { BetterMcpConfig } from "../config.js";
  * Get comprehensive project information.
  */
 export function info(
-  config: BetterMcpConfig
+  config: BetterMcpConfig,
+  pluginInfo?: Array<{ name: string; version: string; description: string; toolCount: number }>,
 ): {
   project: string;
   name: string;
@@ -20,8 +21,10 @@ export function info(
   enabledTools: string[];
   availableCommands: string[];
   resources: Record<string, string>;
+  plugins: Array<{ name: string; version: string; description: string; toolCount: number }>;
 } {
-  const root = config.root;
+  const root: string = config.root ?? process.cwd();
+  const tools = config.tools ?? ({} as NonNullable<BetterMcpConfig["tools"]>);
 
   // Count files and directories
   let fileCount = 0;
@@ -80,13 +83,13 @@ export function info(
   }
 
   const enabledTools: string[] = [];
-  if (config.tools.fs) enabledTools.push("filesystem");
-  if (config.tools.db) enabledTools.push("database");
-  if (config.tools.shell) enabledTools.push("shell");
-  if (config.tools.git?.enabled !== false) enabledTools.push("git");
+  if (tools.fs) enabledTools.push("filesystem");
+  if (tools.db) enabledTools.push("database");
+  if (tools.shell) enabledTools.push("shell");
+  if (tools.git?.enabled !== false) enabledTools.push("git");
 
-  const availableCommands = config.tools.shell?.commands
-    ? Object.keys(config.tools.shell.commands)
+  const availableCommands = tools.shell?.commands
+    ? Object.keys(tools.shell.commands)
     : [];
 
   const resources: Record<string, string> = {};
@@ -98,8 +101,8 @@ export function info(
   }
 
   return {
-    project: config.project,
-    name: config.name || config.project,
+    project: config.project || "default",
+    name: config.name || config.project || "default",
     description: config.description || "",
     root,
     stack: config.stack || [],
@@ -110,6 +113,7 @@ export function info(
     enabledTools,
     availableCommands,
     resources,
+    plugins: pluginInfo ?? [],
   };
 }
 
@@ -156,6 +160,8 @@ export function readResource(
   name: string,
   config: BetterMcpConfig
 ): { name: string; content: string; path: string } {
+  const root: string = config.root ?? process.cwd();
+
   if (!config.resources || !config.resources[name]) {
     const available = config.resources ? Object.keys(config.resources).join(", ") : "(none)";
     throw new Error(
@@ -164,7 +170,7 @@ export function readResource(
   }
 
   const relPath = config.resources[name];
-  const fullPath = isAbsolute(relPath) ? relPath : resolve(config.root, relPath);
+  const fullPath = isAbsolute(relPath) ? relPath : resolve(root, relPath);
 
   if (!existsSync(fullPath)) {
     throw new Error(`Resource file not found: "${name}"`);
