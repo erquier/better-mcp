@@ -1,0 +1,24 @@
+{
+  "project": "better-mcp",
+  "root": "/tmp/better-mcp",
+  "name": "Better MCP Test",
+  "description": "Test instance for development",
+  "stack": ["typescript", "node"],
+  "tools": {
+    "fs": {
+      "allowedPaths": ["/tmp/better-mcp"]
+    },
+    "shell": {
+      "commands": {
+        "build": "npx tsc",
+        "test": "echo 'tests ok'"
+      }
+    },
+    "git": {
+      "enabled": true
+    }
+  },
+  "resources": {
+    "readme": "README.md"
+  }
+}
