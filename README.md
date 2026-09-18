@@ -276,7 +276,7 @@ Requiere `tools.shell` en la config.
 
 #### Seguridad
 - **Whitelist**: `shell_run` solo ejecuta comandos definidos en `commands`.
-- **Raw validation**: `shell_raw` bloquea backticks (` `` `) y newlines para evitar inyección.
+- **Raw validation**: `shell_raw` **solo** bloquea backticks (` `` `) y newlines. **No** filtra `$()`, `;`, `&&`, `||`, `|`, `>`, ni ningún otro metacarácter de shell — con `allowRaw: true` cualquier caller con acceso al MCP puede ejecutar comandos arbitrarios en la máquina donde corre better-mcp, con los mismos permisos del proceso. Es una feature deliberada para power users, no una sandbox. Activalo solo si confiás en todos los clientes MCP conectados, y considerá `auth.mode: "confirm"` o `"token"` para requerir aprobación explícita en cada llamada.
 - **Límite de output**: max 10MB.
 - **Variables de entorno**: `PROJECT_ROOT` se inyecta automáticamente.
 - **Timeout**: default 5 min para `shell_run`, 2 min para `shell_raw`.

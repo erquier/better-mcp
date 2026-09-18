@@ -23,6 +23,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: npx tsc --noEmit
+      - run: npx eslint .
       - run: npx vitest run
 
   publish:

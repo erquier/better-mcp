@@ -148,7 +148,7 @@ export function discoverPluginFiles(pluginsDir: string): string[] {
     // Skip symlinks — they could point outside the plugins directory
     if (stat.isSymbolicLink()) {
       console.error(
-        `[plugins] Skipping symlink \"${fullPath}\" — symlinks are not allowed in plugins directory`,
+        `[plugins] Skipping symlink "${fullPath}" — symlinks are not allowed in plugins directory`,
       );
       continue;
     }
@@ -164,13 +164,13 @@ export function discoverPluginFiles(pluginsDir: string): string[] {
       const rel = relative(resolvedPluginsDir, realPath);
       if (rel.startsWith("..") || isAbsolute(rel)) {
         console.error(
-          `[plugins] Skipping \"${fullPath}\" — resolved path \"${realPath}\" is outside plugins directory`,
+          `[plugins] Skipping "${fullPath}" — resolved path "${realPath}" is outside plugins directory`,
         );
         continue;
       }
     } catch {
       console.error(
-        `[plugins] Skipping \"${fullPath}\" — could not resolve real path`,
+        `[plugins] Skipping "${fullPath}" — could not resolve real path`,
       );
       continue;
     }
@@ -299,7 +299,7 @@ export async function discoverPlugins(
     const expectedName = pluginNameFromPath(filePath);
     if (plugin.name !== expectedName) {
       console.error(
-        `[plugins] Plugin \"${filePath}\" declares name \"${plugin.name}\" but filename is \"${expectedName}\" — possible mismatch`,
+        `[plugins] Plugin "${filePath}" declares name "${plugin.name}" but filename is "${expectedName}" — possible mismatch`,
       );
       // Still load it, but warn
     }

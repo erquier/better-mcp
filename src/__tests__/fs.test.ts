@@ -5,7 +5,8 @@ import {
   searchFiles,
   listDirectory,
 } from "../tools/fs.js";
-import { mkdirSync, writeFileSync, unlinkSync, rmdirSync, existsSync } from "fs";
+import { mkdirSync, writeFileSync, unlinkSync, rmdirSync, existsSync, rmSync } from "fs";
+import { execFileSync } from "child_process";
 import { resolve, sep } from "path";
 
 const TEST_DIR = "/tmp/better-mcp-test";
@@ -14,7 +15,6 @@ const ALLOWED_PATHS = [TEST_DIR];
 // Ensure rg is available
 function ensureRgAvailable(): boolean {
   try {
-    const { execFileSync } = require("child_process");
     execFileSync("rg", ["--version"], { stdio: "ignore" });
     return true;
   } catch {
@@ -30,7 +30,6 @@ beforeEach(() => {
 afterEach(() => {
   // Clean up test directory
   try {
-    const { rmSync } = require("fs");
     rmSync(TEST_DIR, { recursive: true, force: true });
   } catch {
     // ignore
