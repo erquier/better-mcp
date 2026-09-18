@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "MCP server universal para que agentes de IA interactúen con cualquier proyecto — filesystem, DB, shell, git y project tools.",
   "type": "module",
+  "packageManager": "pnpm@10.33.0",
   "bin": {
     "better-mcp": "./dist/index.js"
   },
