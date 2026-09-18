@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "MCP server universal para que agentes de IA interactúen con cualquier proyecto — filesystem, DB, shell, git y project tools.",
   "type": "module",
+  "packageManager": "pnpm@10.33.0",
   "bin": {
     "better-mcp": "./dist/index.js"
   },
@@ -15,6 +16,9 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest run",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "prepublishOnly": "pnpm build"
   },
   "keywords": [
@@ -47,8 +51,13 @@
     "@modelcontextprotocol/sdk": "^1.30.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^26.5.1",
+    "eslint": "^10.10.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.8",
     "typescript": "^5.5.0",
+    "typescript-eslint": "^8.70.0",
     "vitest": "^2.0.0"
   }
 }

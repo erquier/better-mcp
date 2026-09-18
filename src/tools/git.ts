@@ -180,7 +180,8 @@ export function diff(
     throw new Error("Invalid git diff target");
   }
 
-  // Reject dangerous patterns in git refs
+  // Reject dangerous patterns in git refs (control chars intentionally included)
+  // eslint-disable-next-line no-control-regex
   if (/[\x00-\x1f\x7f"';$`|&(){}<>#!]/.test(diffTarget)) {
     throw new Error("Invalid git diff target: contains prohibited characters");
   }

@@ -276,7 +276,7 @@ Requiere `tools.shell` en la config.
 
 #### Seguridad
 - **Whitelist**: `shell_run` solo ejecuta comandos definidos en `commands`.
-- **Raw validation**: `shell_raw` bloquea backticks (` `` `) y newlines para evitar inyección.
+- **Raw validation**: `shell_raw` **solo** bloquea backticks (` `` `) y newlines. **No** filtra `$()`, `;`, `&&`, `||`, `|`, `>`, ni ningún otro metacarácter de shell — con `allowRaw: true` cualquier caller con acceso al MCP puede ejecutar comandos arbitrarios en la máquina donde corre better-mcp, con los mismos permisos del proceso. Es una feature deliberada para power users, no una sandbox. Activalo solo si confiás en todos los clientes MCP conectados, y considerá `auth.mode: "confirm"` o `"token"` para requerir aprobación explícita en cada llamada.
 - **Límite de output**: max 10MB.
 - **Variables de entorno**: `PROJECT_ROOT` se inyecta automáticamente.
 - **Timeout**: default 5 min para `shell_run`, 2 min para `shell_raw`.
@@ -730,7 +730,7 @@ npx tsc --noEmit   # Type-check solo
 
 ### Prerrequisitos
 
-- **Node.js 18+**
+- **Node.js 20.19+ / 22.13+** para desarrollo (lo exige la toolchain: ESLint 10, Vite 8 / Vitest 4). El paquete publicado (`dist/`) sigue soportando Node 18+ en runtime — este requisito más alto aplica solo a quien contribuye al repo.
 - **pnpm** (corepack enable)
 - **ripgrep** (`rg`) — necesario para `fs_search` y sus tests
 - PostgreSQL client (`psql`) — necesario para DB tools

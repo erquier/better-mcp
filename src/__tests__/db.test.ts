@@ -9,7 +9,6 @@ vi.mock("child_process", () => ({
 }));
 
 // Now import after the mock is set up
-// eslint-disable-next-line import/first
 import { query, schema, getToolDefinitions } from "../tools/db.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────
