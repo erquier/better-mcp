@@ -730,7 +730,7 @@ npx tsc --noEmit   # Type-check solo
 
 ### Prerrequisitos
 
-- **Node.js 18+**
+- **Node.js 20.19+ / 22.13+** para desarrollo (lo exige la toolchain: ESLint 10, Vite 8 / Vitest 4). El paquete publicado (`dist/`) sigue soportando Node 18+ en runtime — este requisito más alto aplica solo a quien contribuye al repo.
 - **pnpm** (corepack enable)
 - **ripgrep** (`rg`) — necesario para `fs_search` y sus tests
 - PostgreSQL client (`psql`) — necesario para DB tools
