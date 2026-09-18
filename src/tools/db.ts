@@ -230,6 +230,7 @@ function runPsqlAndGetJson(
   } catch (e) {
     throw new Error(
       `${operation} failed: could not parse JSON output from psql: ${(e as Error).message}`,
+      { cause: e },
     );
   }
 }

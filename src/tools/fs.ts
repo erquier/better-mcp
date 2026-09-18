@@ -146,8 +146,11 @@ export function searchFiles(
     if (err.code === "ENOENT") {
       return { matches: nodeSearch(pattern, allowedPaths, fileGlob, safeLimit) };
     }
-    if (err.signal === "SIGTERM") throw new Error("Search timed out");
-    throw new Error(err.stderr ? `Search failed: ${String(err.stderr).slice(0, 300)}` : "Search failed");
+    if (err.signal === "SIGTERM") throw new Error("Search timed out", { cause: e });
+    throw new Error(
+      err.stderr ? `Search failed: ${String(err.stderr).slice(0, 300)}` : "Search failed",
+      { cause: e },
+    );
   }
 
   // Parse JSON lines output from rg --json
@@ -229,7 +232,7 @@ function canonicalize(abs: string, depth = 0): string {
   const tail: string[] = [];
 
   for (;;) {
-    let st: ReturnType<typeof lstatSync> | null = null;
+    let st: ReturnType<typeof lstatSync> | null;
     try {
       st = lstatSync(current);
     } catch {
